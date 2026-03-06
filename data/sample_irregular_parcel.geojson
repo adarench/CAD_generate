@@ -1,0 +1,20 @@
+{
+  "type": "Feature",
+  "properties": {
+    "name": "sample_irregular_parcel"
+  },
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [0, 0],
+        [780, 0],
+        [860, 220],
+        [720, 560],
+        [240, 620],
+        [0, 410],
+        [0, 0]
+      ]
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+openai>=2.24.0
+numpy>=2.0.0
+pydantic>=2.12.0
+shapely>=2.0.0
+ezdxf>=1.3.0
+streamlit>=1.42.0
+plotly>=6.0.0
+# Optional geometric backend for solid export and assembly workflows.
+cadquery>=2.5.0

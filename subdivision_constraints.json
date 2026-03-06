@@ -1,0 +1,43 @@
+{
+  "parcel": {
+    "shape": "polygon",
+    "area_acres": null,
+    "aspect_ratio": 1.5,
+    "boundary": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        780.0,
+        0.0
+      ],
+      [
+        860.0,
+        220.0
+      ],
+      [
+        720.0,
+        560.0
+      ],
+      [
+        240.0,
+        620.0
+      ],
+      [
+        0.0,
+        410.0
+      ]
+    ]
+  },
+  "lots": {
+    "count": 24
+  },
+  "road": {
+    "orientation": "north_south",
+    "width_ft": 40.0
+  },
+  "easement": {
+    "width_ft": 10.0
+  }
+}
