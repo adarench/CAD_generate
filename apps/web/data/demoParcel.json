@@ -1,0 +1,26 @@
+{
+  "id": "slc-12345678",
+  "county": "Salt Lake",
+  "apn": "12345678",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [-111.90037, 40.30028],
+        [-111.89963, 40.30028],
+        [-111.89963, 40.29972],
+        [-111.90037, 40.29972],
+        [-111.90037, 40.30028]
+      ]
+    ]
+  },
+  "areaSqft": 42000,
+  "areaAcres": 0.96,
+  "address": "123 Demo Lane, Salt Lake City",
+  "ownerName": "State of Utah",
+  "sourceProvider": "UGRC",
+  "sourceDataset": "ut-parcels",
+  "sourceObjectId": "abc123",
+  "rawAttributes": {},
+  "fetchedAt": "2026-03-06T00:00:00Z"
+}

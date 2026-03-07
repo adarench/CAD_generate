@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.venv/
+node_modules/
+.next/
+dist/
+build/
+apps/python-api/data/exports/
+apps/python-api/data/*.json

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence
+from typing import List, Sequence
 
 from .constraints import SubdivisionConstraints
 from .geometry import parcel_shapely_from_constraints
 from .street_network import StreetNetworkCandidate, generate_candidate_street_networks
-from .subdivision import LayoutData, generate_optimization_target, generate_subdivision
+from .subdivision import LayoutData, generate_optimization_target, generate_subdivision, summarize_layout
 from .zoning import ZoningRules
+
+
+@dataclass(frozen=True)
+class CandidateEvaluation:
+    topology: str
+    lot_count: int
+    road_length_ft: float
+    developable_area_sqft: float
 
 
 @dataclass(frozen=True)
@@ -16,6 +24,7 @@ class OptimizationResult:
     lot_count: int
     layouts_tested: int
     best_network: StreetNetworkCandidate
+    candidate_summary: List[CandidateEvaluation]
 
 
 def optimize_yield(
@@ -35,6 +44,9 @@ def optimize_yield(
         street_networks = [
             network for network in street_networks if network.topology in allowed_topologies
         ]
+    if not street_networks:
+        requested = ", ".join(allowed_topologies) if allowed_topologies else "the requested topology set"
+        raise ValueError(f"No street-network candidates were generated for {requested}.")
     # Previously the optimizer just picked the candidate with the most lots and emitted
     # whatever topology that happened to be (usually parallel), so even if loops/culdesacs
     # existed they were never surfaced. This filtering + logging ensures each topology is
@@ -43,7 +55,7 @@ def optimize_yield(
     best_layout = None
     best_lot_count = -1
     tested = 0
-    candidate_results: List[tuple[str, int, float]] = []
+    candidate_results: List[CandidateEvaluation] = []
 
     for network in street_networks:
         tested += 1
@@ -58,21 +70,34 @@ def optimize_yield(
         except ValueError:
             continue
         lot_count = len(layout.lots)
-        candidate_results.append((network.topology, lot_count, network.road_length_ft))
+        summary = summarize_layout(constraints, zoning_rules, layout)
+        candidate_results.append(
+            CandidateEvaluation(
+                topology=network.topology,
+                lot_count=lot_count,
+                road_length_ft=network.road_length_ft,
+                developable_area_sqft=float(summary["developable_area_sqft"]),
+            )
+        )
         if lot_count > best_lot_count:
             best_layout = layout
             best_lot_count = lot_count
 
     if best_layout is None:
-        raise RuntimeError("Yield optimization did not produce any layouts.")
+        requested = ", ".join(allowed_topologies) if allowed_topologies else "the requested topology set"
+        raise ValueError(f"Yield optimization did not produce any valid layouts for {requested}.")
 
     print("\nTested street network candidates:")
-    for topology, count, length in candidate_results:
-        print(f"  {topology:8s} → lots={count:2d}, road_length={length:.1f} ft")
+    for candidate in candidate_results:
+        print(
+            f"  {candidate.topology:8s} → lots={candidate.lot_count:2d}, "
+            f"road_length={candidate.road_length_ft:.1f} ft"
+        )
 
     return OptimizationResult(
         best_layout=best_layout,
         lot_count=best_lot_count,
         layouts_tested=tested,
         best_network=best_layout.street_network,
+        candidate_summary=candidate_results,
     )

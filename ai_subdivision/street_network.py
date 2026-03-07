@@ -63,16 +63,16 @@ def _generate_spine_layouts(parcel_polygon, road_width_ft: float) -> List[Street
             collector = road_centerlines(parcel_polygon, plan)[0]
             branches = _perpendicular_branches(parcel_polygon, collector, orientation, side_offsets)
             centerlines = [collector, *branches]
-            networks.append(
-                _network_candidate(
-                    parcel_polygon=parcel_polygon,
-                    centerlines=centerlines,
-                    topology="spine",
-                    orientation=orientation,
-                    road_width_ft=road_width_ft,
-                    metadata={"offset_ft": offset},
-                )
+            candidate = _network_candidate(
+                parcel_polygon=parcel_polygon,
+                centerlines=centerlines,
+                topology="spine",
+                orientation=orientation,
+                road_width_ft=road_width_ft,
+                metadata={"offset_ft": offset},
             )
+            if candidate is not None:
+                networks.append(candidate)
     return networks
 
 
@@ -88,20 +88,20 @@ def _generate_parallel_layouts(parcel_polygon, road_width_ft: float) -> List[Str
                     road_count=road_count,
                     spacing_ft=spacing,
                 )
-                networks.append(
-                    _network_candidate(
-                        parcel_polygon=parcel_polygon,
-                        centerlines=centerlines,
-                        topology="parallel",
-                        orientation=orientation,
-                        road_width_ft=road_width_ft,
-                        metadata={
-                            "offset_ft": offset,
-                            "road_count": float(road_count),
-                            "spacing_ft": spacing,
-                        },
-                    )
+                candidate = _network_candidate(
+                    parcel_polygon=parcel_polygon,
+                    centerlines=centerlines,
+                    topology="parallel",
+                    orientation=orientation,
+                    road_width_ft=road_width_ft,
+                    metadata={
+                        "offset_ft": offset,
+                        "road_count": float(road_count),
+                        "spacing_ft": spacing,
+                    },
                 )
+                if candidate is not None:
+                    networks.append(candidate)
     return networks
 
 
@@ -120,19 +120,19 @@ def _generate_loop_layouts(parcel_polygon, road_width_ft: float) -> List[StreetN
                 else:
                     connector = LineString([(min_x - 80.0, centroid.y), (loop.centroid.x, centroid.y)])
                 centerlines = [loop.intersection(parcel_polygon), connector.intersection(parcel_polygon)]
-                networks.append(
-                    _network_candidate(
-                        parcel_polygon=parcel_polygon,
-                        centerlines=centerlines,
-                        topology="loop",
-                        orientation=orientation,
-                        road_width_ft=road_width_ft,
-                        metadata={
-                            "loop_width_ratio": width_ratio,
-                            "loop_height_ratio": height_ratio,
-                        },
-                    )
+                candidate = _network_candidate(
+                    parcel_polygon=parcel_polygon,
+                    centerlines=centerlines,
+                    topology="loop",
+                    orientation=orientation,
+                    road_width_ft=road_width_ft,
+                    metadata={
+                        "loop_width_ratio": width_ratio,
+                        "loop_height_ratio": height_ratio,
+                    },
                 )
+                if candidate is not None:
+                    networks.append(candidate)
     return networks
 
 
@@ -152,20 +152,20 @@ def _generate_culdesac_layouts(parcel_polygon, road_width_ft: float) -> List[Str
                         depth_ft=depth,
                         radius_ft=radius,
                     )
-                    networks.append(
-                        _network_candidate(
-                            parcel_polygon=parcel_polygon,
-                            centerlines=centerlines,
-                            topology="culdesac",
-                            orientation=orientation,
-                            road_width_ft=road_width_ft,
-                            metadata={
-                                "offset_ft": offset,
-                                "depth_ft": depth,
-                                "radius_ft": radius,
-                            },
-                        )
+                    candidate = _network_candidate(
+                        parcel_polygon=parcel_polygon,
+                        centerlines=centerlines,
+                        topology="culdesac",
+                        orientation=orientation,
+                        road_width_ft=road_width_ft,
+                        metadata={
+                            "offset_ft": offset,
+                            "depth_ft": depth,
+                            "radius_ft": radius,
+                        },
                     )
+                    if candidate is not None:
+                        networks.append(candidate)
     return networks
 
 
@@ -242,11 +242,20 @@ def _culdesac_centerlines(parcel_polygon, orientation: str, offset_ft: float, de
     return [stem.intersection(parcel_polygon), bulb.intersection(parcel_polygon)]
 
 
-def _network_candidate(parcel_polygon, centerlines: List[LineString], topology: str, orientation: str, road_width_ft: float, metadata: Dict[str, float]) -> StreetNetworkCandidate:
+def _network_candidate(parcel_polygon, centerlines: List[LineString], topology: str, orientation: str, road_width_ft: float, metadata: Dict[str, float]) -> StreetNetworkCandidate | None:
     centerlines = [line for line in centerlines if not line.is_empty]
-    corridors = geometry_to_polygon_list(
-        road_geometry_from_centerlines(parcel_polygon, centerlines, road_width_ft)
-    )
+    if not centerlines:
+        return None
+    try:
+        corridors = geometry_to_polygon_list(
+            road_geometry_from_centerlines(parcel_polygon, centerlines, road_width_ft)
+        )
+    except ValueError:
+        # Irregular parcels can invalidate certain generated layouts; skip those candidates
+        # instead of aborting the entire topology search.
+        return None
+    if not corridors:
+        return None
     return StreetNetworkCandidate(
         centerlines=centerlines,
         corridors=corridors,

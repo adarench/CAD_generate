@@ -1,159 +1,143 @@
-# AI Subdivision Generator Prototype
+# Utah Subdivision Studio
 
-This repository contains a CLI prototype that turns a natural-language subdivision prompt into:
+Utah Subdivision Studio is a parcel-driven land feasibility demo built around the existing `ai_subdivision` optimization engine. The current stack includes:
 
-- validated constraint JSON
-- a generated subdivision layout
-- an AutoCAD-compatible DXF file
+- live Utah parcel lookup against UGRC ArcGIS parcel services
+- county-scoped APN search and map-click parcel selection
+- canonical parcel normalization before planning
+- FastAPI optimization and export APIs
+- PostgreSQL/PostGIS-ready persistence for parcels, runs, results, and parcel sources
+- Next.js planner and saved-run UI
+- DXF, STEP, and GeoJSON exports for every saved run
 
-The working demo uses a simple geometry model:
-
-- rectangular parcel centered at the origin
-- one central road
-- equal-area rectangular lots on both sides of the road
-- utility easement bands adjacent to the road
-
-Phase 2 extends this with:
-
-- parcel import from GeoJSON polygon boundaries
-- road corridors clipped to irregular parcels
-- lot polygons sliced and clipped against the actual parcel shape
-
-The current engine also supports frontage-aware lot generation:
-
-- frontage extracted from developable land adjacent to the road corridor
-- lot segmentation by minimum frontage width
-- perpendicular lot templates clipped to the developable polygon
-- zoning-rule filtering by frontage, depth, and area
-- DXF lot labels on a `LOT_LABELS` layer
-
-## Project Structure
+## Monorepo Layout
 
 ```text
-ai_subdivision/
-  main.py
-  ai_parser.py
-  constraints.py
-  geometry.py
-  subdivision.py
-  dxf_export.py
-  street_network.py
-  yield_optimizer.py
-demo_app.py
-main.py
-requirements.txt
-docs/cadquery_landdev_roadmap.md
+ai_subdivision/          Geometry engine, street networks, yield optimization
+apps/python-api/         FastAPI parcel + optimization API, DB persistence, export serving
+apps/web/                Next.js parcel map, planner workspace, run history UI
+apps/python-api/db/      PostGIS schema
+apps/python-api/data/    JSON fallback cache + generated export artifacts
 ```
 
-## Dependencies
+## Environment
 
-The prototype is designed to run in two modes:
+Copy `.env.example` to `.env` and adjust if needed:
 
-1. Full mode with `openai`, `numpy`, `pydantic`, `shapely`, `ezdxf`, and optionally `cadquery`
-2. Fallback mode with only `openai`, `numpy`, and `pydantic`
+```bash
+cp .env.example .env
+```
 
-Fallback mode still parses prompts locally and writes a valid ASCII DXF file without `shapely`, `ezdxf`, or `cadquery`.
+Key variables:
 
-## Install
+- `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/subdivision`
+- local PostgreSQL also works, e.g. `postgresql://arench@127.0.0.1:54329/subdivision`
+- `PUBLIC_API_BASE_URL=http://127.0.0.1:8000`
+- `PYTHON_API_URL=http://127.0.0.1:8000`
+
+## Database Bootstrap
+
+### Option A: Docker / PostGIS container
+
+```bash
+docker compose up -d postgis
+```
+
+The schema is mounted from [apps/python-api/db/schema.sql](/Users/arench/Desktop/Architecture_test/apps/python-api/db/schema.sql).
+
+### Option B: Local PostgreSQL
+
+If PostgreSQL is already running locally, create the DB and apply the schema:
+
+```bash
+createdb subdivision
+psql "$DATABASE_URL" -f apps/python-api/db/schema.sql
+```
+
+If PostGIS is not installed yet, install it first for your local PostgreSQL distribution.
+
+## Backend
 
 ```bash
 python3 -m pip install -r requirements.txt
+python3 -m pip install -r apps/python-api/requirements.txt
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/subdivision \
+PUBLIC_API_BASE_URL=http://127.0.0.1:8000 \
+python3 -m uvicorn main:app --app-dir apps/python-api --host 127.0.0.1 --port 8000
 ```
 
-## Run
+### Backend routes
+
+- `GET /api/health`
+- `GET /api/parcels/search?county=Salt%20Lake&apn=12345678`
+- `GET /api/parcels/by-click?county=Salt%20Lake&lng=-111.89&lat=40.30`
+- `GET /api/parcels/{parcelId}`
+- `GET /api/parcels/recent`
+- `POST /api/optimize`
+- `GET /api/runs`
+- `GET /api/runs/{runId}`
+- `GET /exports/{runId}/{filename}`
+
+## Frontend
 
 ```bash
-python3 main.py "Create a subdivision on a 10 acre rectangular parcel with 24 lots, a main road running north south, and 10 foot utility easements along the road."
+npm install --prefix apps/web
+PYTHON_API_URL=http://127.0.0.1:8000 npm run dev --prefix apps/web
 ```
 
-If no prompt argument is provided, the CLI will prompt interactively.
+Open:
 
-Phase 2 irregular parcel example:
+- `http://127.0.0.1:3000/`
+- `http://127.0.0.1:3000/map`
+- `http://127.0.0.1:3000/planner/<parcelId>`
+- `http://127.0.0.1:3000/runs`
 
-```bash
-python3 main.py \
-  "Create a subdivision on a 12 acre parcel with 28 lots, a north-south collector road, and 12 foot utility easements along the road." \
-  --parcel-geojson data/sample_irregular_parcel.geojson \
-  --output phase2_irregular.dxf \
-  --step phase2_irregular.step
-```
+## Product Workflow
 
-Custom zoning rules:
+### Map intake
 
-```bash
-python3 main.py \
-  "Create a subdivision on a 10 acre parcel with 24 lots and a north south road." \
-  --zoning-rules zoning_rules.json
-```
+- open `/map`
+- choose a Utah county
+- search by APN or click the map
+- review the normalized parcel drawer
+- open the planner
 
-Yield optimization:
+### Planner
 
-```bash
-python3 main.py \
-  "Create a subdivision on a 12 acre parcel with a collector road and 12 foot utility easements" \
-  --parcel-geojson data/sample_irregular_parcel.geojson \
-  --optimize \
-  --output optimized_layout.dxf
-```
+- adjust frontage, depth, min area, road width, easement width, and target lots
+- select topology preferences and strict mode
+- run optimization
+- review summary, candidate breakdown, and exports
+- open the saved run
 
-Topology-focused optimization:
+### Saved runs
 
-```bash
-python3 main.py \
-  "Create a subdivision on a 12 acre parcel with loop streets" \
-  --parcel-geojson data/sample_irregular_parcel.geojson \
-  --optimize \
-  --topology loop \
-  --output optimized_loop.dxf
-```
+- view `/runs`
+- reopen `/runs/[runId]`
+- inspect geometry, input constraints, topology results, and export links
 
-Interactive UI demo:
+## Live Parcel Integration
 
-```bash
-python3 -m streamlit run demo_app.py
-```
+The backend ArcGIS client lives in [apps/python-api/services/arcgis_parcel_client.py](/Users/arench/Desktop/Architecture_test/apps/python-api/services/arcgis_parcel_client.py). It queries official UGRC parcel feature services such as:
 
-The UI now exposes a topology filter (`all`, `parallel`, `spine`, `loop`, `culdesac`) that guides which street-network candidates the optimizer evaluates, and the console output lists each tested topology with its lot count and road length.
+- `https://services1.arcgis.com/99lidPhWCzftIe9K/ArcGIS/rest/services/Parcels_SaltLake/FeatureServer/0`
 
-## Output
+The client normalizes the ArcGIS payload into the canonical parcel schema and caches the result in Postgres or the local JSON fallback if the database is unavailable.
 
-The command writes:
+## Validation
 
-- `subdivision_constraints.json`
-- `subdivision_layout.dxf`
-- optional lot labels on `LOT_LABELS`
-- optional GeoJSON export through the demo app
+Validated locally during development:
 
-The DXF contains these layers:
+- `python3 -m py_compile apps/python-api/main.py apps/python-api/schemas.py apps/python-api/services/*.py ai_subdivision/*.py`
+- `npm run build --prefix apps/web`
+- `GET /api/health` returns `{"status":"ok"}`
+- live APN lookup for Salt Lake County parcel `22282760130000`
+- live map-click parcel lookup near `(-111.83684683892612, 40.61985292120375)`
+- PostGIS parcel cache verified with SQL row counts
+- live optimize request saved run `e132edc2-8288-41f8-9551-a4e3d40a9629`
+- saved run fetch returning stored geometry and metadata
+- DXF / STEP / GeoJSON export files created under `apps/python-api/data/exports/<runId>/`
+- frontend pages served locally on port 3000 with HTTP 200 for `/`, `/map`, `/planner/[parcelId]`, and `/runs/[runId]`
+- Next.js proxy routes verified for parcel search, run history, and optimization
 
-- `PARCEL`
-- `ROAD`
-- `OPT_ROAD` for optimized road layouts
-- `LOT_LINES`
-- `EASEMENTS`
-
-Optional STEP export through CadQuery:
-
-```bash
-python3 main.py "Create a 12 acre subdivision with 30 lots and a north south road." --step subdivision_layout.step
-```
-
-## Example Prompt
-
-```text
-Create a subdivision on a 12 acre parcel with 28 lots, a north-south collector road, sidewalks, and utility easements along the road.
-```
-
-Sample parcel file:
-
-- `data/sample_irregular_parcel.geojson`
-- `zoning_rules.json`
-
-## Notes
-
-- The OpenAI parser is used only when `OPENAI_API_KEY` is set. Otherwise the CLI uses a local regex parser.
-- Parcel import currently supports GeoJSON `Polygon` geometry only.
-- Frontage-aware lot generation is deterministic and zoning-filtered, but still intended for early feasibility work rather than final engineering parcelization.
-- If the requested lot count exceeds frontage/zoning capacity, the engine returns the feasible count instead of creating noncompliant lots.
-- The optimizer now evaluates procedural street networks including spine, parallel, loop, and cul-de-sac candidates.
-- Optional CadQuery export is available through `--step` and is implemented in `ai_subdivision/geometry.py`.
+The product keeps a JSON fallback cache for development, but the verified path above used a live PostGIS-backed PostgreSQL instance on port `54329`.
