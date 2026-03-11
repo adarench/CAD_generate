@@ -5,7 +5,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 from shapely.geometry import shape
@@ -143,6 +143,48 @@ class ArcGISParcelClient:
             )
             raise RuntimeError(f"Parcel source unavailable for {county} County.") from exc
 
+    async def count_county_records(self, county: str) -> int:
+        payload = await self._query_metadata(
+            county,
+            {
+                "where": "1=1",
+                "returnCountOnly": "true",
+            },
+        )
+        return int(payload.get("count") or 0)
+
+    async def fetch_county_object_ids(self, county: str) -> list[int]:
+        payload = await self._query_metadata(
+            county,
+            {
+                "where": "1=1",
+                "returnIdsOnly": "true",
+            },
+        )
+        object_ids = payload.get("objectIds") or []
+        return sorted(int(value) for value in object_ids)
+
+    async def stream_county_records(
+        self,
+        county: str,
+        batch_size: int = 1000,
+    ) -> AsyncIterator[list[ParcelRecord]]:
+        object_ids = await self.fetch_county_object_ids(county)
+        for start in range(0, len(object_ids), batch_size):
+            batch_ids = object_ids[start : start + batch_size]
+            where = f"OBJECTID IN ({','.join(str(value) for value in batch_ids)})"
+            payload = await self._query_features(
+                county,
+                where=where,
+                extra_params={
+                    "orderByFields": "OBJECTID ASC",
+                },
+            )
+            records = self._normalize_response(payload, county)
+            if not records:
+                continue
+            yield records
+
     def parcel_source(self, county: str) -> ParcelSourceRecord:
         service_url = self._service_url(county)
         return ParcelSourceRecord(
@@ -192,7 +234,16 @@ class ArcGISParcelClient:
 
         LOGGER.info("Querying parcel service", extra={"county": county, "service_url": service_url})
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
-            response = await client.get(f"{service_url}/query", params=params)
+            response = await client.post(f"{service_url}/query", data=params)
+            response.raise_for_status()
+            return response.json()
+
+    async def _query_metadata(self, county: str, params: dict[str, str]) -> dict[str, Any]:
+        service_url = self._service_url(county)
+        request_params = {"f": "json"}
+        request_params.update(params)
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            response = await client.post(f"{service_url}/query", data=request_params)
             response.raise_for_status()
             return response.json()
 

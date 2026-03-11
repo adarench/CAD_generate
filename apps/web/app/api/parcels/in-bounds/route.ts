@@ -9,7 +9,8 @@ export async function GET(request: Request) {
   const minLat = searchParams.get("minLat");
   const maxLng = searchParams.get("maxLng");
   const maxLat = searchParams.get("maxLat");
-  const limit = searchParams.get("limit") ?? "150";
+  const limit = searchParams.get("limit") ?? "2000";
+  const zoom = searchParams.get("zoom");
 
   if (!county || !minLng || !minLat || !maxLng || !maxLat) {
     return NextResponse.json(
@@ -24,7 +25,8 @@ export async function GET(request: Request) {
     `&minLat=${encodeURIComponent(minLat)}` +
     `&maxLng=${encodeURIComponent(maxLng)}` +
     `&maxLat=${encodeURIComponent(maxLat)}` +
-    `&limit=${encodeURIComponent(limit)}`;
+    `&limit=${encodeURIComponent(limit)}` +
+    (zoom ? `&zoom=${encodeURIComponent(zoom)}` : "");
 
   const response = await fetch(url, { cache: "no-store" });
   const body = await response.text();

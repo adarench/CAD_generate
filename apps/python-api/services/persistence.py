@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
+from time import perf_counter
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,22 @@ class PersistenceLayer:
         if self.database_url:
             await self._save_parcel_sql(ParcelRecord.model_validate(payload), source)
 
+    async def save_parcel_batch(
+        self,
+        parcels: list[ParcelRecord],
+        source: ParcelSourceRecord | None = None,
+        update_json: bool = False,
+    ) -> None:
+        if not parcels:
+            return
+        if update_json:
+            for parcel in parcels:
+                payload = hydrate_parcel_payload(parcel.model_dump(mode="json"))
+                self._parcels[parcel.id] = payload
+            PARCELS_FILE.write_text(json.dumps(self._parcels, indent=2))
+        if self.database_url:
+            await self._save_parcel_batch_sql(parcels, source)
+
     async def get_parcel(self, parcel_id: str) -> ParcelRecord | None:
         if self.database_url:
             record = await self._get_parcel_sql(parcel_id)
@@ -56,6 +73,7 @@ class PersistenceLayer:
         max_lng: float,
         max_lat: float,
         limit: int = 150,
+        zoom: float | None = None,
     ) -> list[ParcelRecord]:
         if self.database_enabled:
             return await self._search_parcels_by_bounds_sql(
@@ -65,6 +83,7 @@ class PersistenceLayer:
                 max_lng=max_lng,
                 max_lat=max_lat,
                 limit=limit,
+                zoom=zoom,
             )
         return self.search_local_parcels_by_bounds(
             county=county,
@@ -213,75 +232,20 @@ class PersistenceLayer:
     async def _save_parcel_sql(self, parcel: ParcelRecord, source: ParcelSourceRecord | None) -> None:
         conn = await asyncpg.connect(dsn=self.database_url)
         if source:
-            await conn.execute(
-                """
-                INSERT INTO parcel_sources(id, provider, dataset_name, dataset_url, refresh_status, metadata_json)
-                VALUES($1, $2, $3, $4, $5, $6::jsonb)
-                ON CONFLICT (id) DO UPDATE SET
-                  provider = EXCLUDED.provider,
-                  dataset_name = EXCLUDED.dataset_name,
-                  dataset_url = EXCLUDED.dataset_url,
-                  refresh_status = EXCLUDED.refresh_status,
-                  metadata_json = EXCLUDED.metadata_json;
-                """,
-                source.id,
-                source.provider,
-                source.datasetName,
-                source.datasetUrl,
-                source.refreshStatus,
-                json.dumps(source.metadataJson),
-            )
-        geometry_json = json.dumps(parcel.geometryGeoJSON.model_dump(mode="json"))
-        await conn.execute(
-            """
-            INSERT INTO parcels(
-              id, state, county, apn, source_provider, source_dataset, source_object_id, geometry,
-              centroid, area_sqft, area_acres, address, owner_name, zoning_code, land_use,
-              raw_attributes, fetched_at, updated_at
-            )
-            VALUES(
-              $1, $2, $3, $4, $5, $6, $7,
-              ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON($8), 4326)),
-              ST_SetSRID(ST_MakePoint($9, $10), 4326),
-              $11, $12, $13, $14, $15, $16, $17::jsonb, $18, NOW()
-            )
-            ON CONFLICT (id) DO UPDATE SET
-              county = EXCLUDED.county,
-              apn = EXCLUDED.apn,
-              source_provider = EXCLUDED.source_provider,
-              source_dataset = EXCLUDED.source_dataset,
-              source_object_id = EXCLUDED.source_object_id,
-              geometry = EXCLUDED.geometry,
-              centroid = EXCLUDED.centroid,
-              area_sqft = EXCLUDED.area_sqft,
-              area_acres = EXCLUDED.area_acres,
-              address = EXCLUDED.address,
-              owner_name = EXCLUDED.owner_name,
-              zoning_code = EXCLUDED.zoning_code,
-              land_use = EXCLUDED.land_use,
-              raw_attributes = EXCLUDED.raw_attributes,
-              fetched_at = EXCLUDED.fetched_at,
-              updated_at = NOW();
-            """,
-            parcel.id,
-            parcel.state,
-            parcel.county,
-            parcel.apn,
-            parcel.sourceProvider,
-            parcel.sourceDataset,
-            parcel.sourceObjectId,
-            geometry_json,
-            float(parcel.centroid["lng"]),
-            float(parcel.centroid["lat"]),
-            parcel.areaSqft,
-            parcel.areaAcres,
-            parcel.address,
-            parcel.ownerName,
-            parcel.zoningCode,
-            parcel.landUse,
-            json.dumps(parcel.rawAttributes),
-            parcel.fetchedAt,
-        )
+            await upsert_parcel_source(conn, source)
+        await execute_parcel_upsert(conn, [parcel])
+        await conn.close()
+
+    async def _save_parcel_batch_sql(
+        self,
+        parcels: list[ParcelRecord],
+        source: ParcelSourceRecord | None,
+    ) -> None:
+        conn = await asyncpg.connect(dsn=self.database_url)
+        if source:
+            await upsert_parcel_source(conn, source)
+        async with conn.transaction():
+            await execute_parcel_upsert(conn, parcels)
         await conn.close()
 
     async def _get_parcel_sql(self, parcel_id: str) -> ParcelRecord | None:
@@ -335,13 +299,20 @@ class PersistenceLayer:
         max_lng: float,
         max_lat: float,
         limit: int,
+        zoom: float | None = None,
     ) -> list[ParcelRecord]:
         conn = await asyncpg.connect(dsn=self.database_url)
-        rows = await conn.fetch(
-            """
+        tolerance = simplification_tolerance_for_zoom(zoom)
+        geometry_sql = (
+            "ST_AsGeoJSON(ST_Multi(ST_SimplifyPreserveTopology(geometry, $7)))::json AS geometry_geojson"
+            if tolerance > 0
+            else "ST_AsGeoJSON(geometry)::json AS geometry_geojson"
+        )
+        started_at = perf_counter()
+        sql = f"""
             SELECT
               id, state, county, apn, source_provider, source_dataset, source_object_id,
-              ST_AsGeoJSON(geometry)::json AS geometry_geojson,
+              {geometry_sql},
               ST_X(centroid) AS centroid_lng,
               ST_Y(centroid) AS centroid_lat,
               area_sqft, area_acres, address, owner_name, zoning_code, land_use, raw_attributes,
@@ -351,16 +322,26 @@ class PersistenceLayer:
               AND geometry && ST_MakeEnvelope($2, $3, $4, $5, 4326)
               AND ST_Intersects(geometry, ST_MakeEnvelope($2, $3, $4, $5, 4326))
             ORDER BY area_sqft ASC NULLS LAST, fetched_at DESC
-            LIMIT $6
-            """,
-            county,
-            min_lng,
-            min_lat,
-            max_lng,
-            max_lat,
-            limit,
-        )
+              LIMIT $6
+            """
+        params: list[Any] = [county, min_lng, min_lat, max_lng, max_lat, limit]
+        if tolerance > 0:
+            params.append(tolerance)
+        rows = await conn.fetch(sql, *params)
         await conn.close()
+        query_time_ms = round((perf_counter() - started_at) * 1000, 2)
+        print(
+            "[parcel_query]",
+            {
+                "source": "postgis",
+                "county": county,
+                "rows": len(rows),
+                "query_time_ms": query_time_ms,
+                "limit": limit,
+                "zoom": zoom,
+                "tolerance": tolerance,
+            },
+        )
         return [build_parcel_from_row(row) for row in rows]
 
     async def _search_parcels_by_point_sql(
@@ -671,3 +652,94 @@ def parcel_sort_key(parcel: ParcelRecord) -> tuple[float, float]:
     area_sqft = float(parcel.areaSqft) if parcel.areaSqft is not None else float("inf")
     fetched_at = parcel.fetchedAt.timestamp() if parcel.fetchedAt else 0.0
     return (area_sqft, -fetched_at)
+
+
+async def upsert_parcel_source(conn: asyncpg.Connection, source: ParcelSourceRecord) -> None:
+    await conn.execute(
+        """
+        INSERT INTO parcel_sources(id, provider, dataset_name, dataset_url, refresh_status, metadata_json)
+        VALUES($1, $2, $3, $4, $5, $6::jsonb)
+        ON CONFLICT (id) DO UPDATE SET
+          provider = EXCLUDED.provider,
+          dataset_name = EXCLUDED.dataset_name,
+          dataset_url = EXCLUDED.dataset_url,
+          refresh_status = EXCLUDED.refresh_status,
+          metadata_json = EXCLUDED.metadata_json;
+        """,
+        source.id,
+        source.provider,
+        source.datasetName,
+        source.datasetUrl,
+        source.refreshStatus,
+        json.dumps(source.metadataJson),
+    )
+
+
+async def execute_parcel_upsert(conn: asyncpg.Connection, parcels: list[ParcelRecord]) -> None:
+    rows = []
+    for parcel in parcels:
+        rows.append(
+            (
+                parcel.id,
+                parcel.state,
+                parcel.county,
+                parcel.apn,
+                parcel.sourceProvider,
+                parcel.sourceDataset,
+                parcel.sourceObjectId,
+                json.dumps(parcel.geometryGeoJSON.model_dump(mode="json")),
+                float(parcel.centroid["lng"]),
+                float(parcel.centroid["lat"]),
+                parcel.areaSqft,
+                parcel.areaAcres,
+                parcel.address,
+                parcel.ownerName,
+                parcel.zoningCode,
+                parcel.landUse,
+                json.dumps(parcel.rawAttributes),
+                parcel.fetchedAt,
+            )
+        )
+    await conn.executemany(
+        """
+        INSERT INTO parcels(
+          id, state, county, apn, source_provider, source_dataset, source_object_id, geometry,
+          centroid, area_sqft, area_acres, address, owner_name, zoning_code, land_use,
+          raw_attributes, fetched_at, updated_at
+        )
+        VALUES(
+          $1, $2, $3, $4, $5, $6, $7,
+          ST_Multi(ST_SetSRID(ST_GeomFromGeoJSON($8), 4326)),
+          ST_SetSRID(ST_MakePoint($9, $10), 4326),
+          $11, $12, $13, $14, $15, $16, $17::jsonb, $18, NOW()
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          county = EXCLUDED.county,
+          apn = EXCLUDED.apn,
+          source_provider = EXCLUDED.source_provider,
+          source_dataset = EXCLUDED.source_dataset,
+          source_object_id = EXCLUDED.source_object_id,
+          geometry = EXCLUDED.geometry,
+          centroid = EXCLUDED.centroid,
+          area_sqft = EXCLUDED.area_sqft,
+          area_acres = EXCLUDED.area_acres,
+          address = EXCLUDED.address,
+          owner_name = EXCLUDED.owner_name,
+          zoning_code = EXCLUDED.zoning_code,
+          land_use = EXCLUDED.land_use,
+          raw_attributes = EXCLUDED.raw_attributes,
+          fetched_at = EXCLUDED.fetched_at,
+          updated_at = NOW();
+        """,
+        rows,
+    )
+
+
+def simplification_tolerance_for_zoom(zoom: float | None) -> float:
+    if zoom is None:
+        return 0.0
+    if zoom < 11:
+        return 0.0003
+    if zoom <= 13:
+        return 0.0001
+    return 0.0

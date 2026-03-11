@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -101,7 +102,8 @@ async def parcels_in_bounds(
     minLat: float,
     maxLng: float,
     maxLat: float,
-    limit: int = Query(default=150, ge=1, le=300),
+    limit: int = Query(default=150, ge=1, le=5000),
+    zoom: Optional[float] = Query(default=None, ge=0),
 ):
     try:
         parcels = await parcel_service.search_by_bounds(
@@ -111,6 +113,7 @@ async def parcels_in_bounds(
             max_lng=maxLng,
             max_lat=maxLat,
             limit=limit,
+            zoom=zoom,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -124,6 +127,7 @@ async def parcels_in_bounds(
             "maxLng": maxLng,
             "maxLat": maxLat,
             "limit": limit,
+            "zoom": zoom,
             "count": len(parcels),
         },
     )

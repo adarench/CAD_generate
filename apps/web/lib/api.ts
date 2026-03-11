@@ -26,7 +26,8 @@ export async function fetchParcelByClick(lng: number, lat: number, county: strin
 export async function fetchParcelsInBounds(
   county: string,
   bounds: { minLng: number; minLat: number; maxLng: number; maxLat: number },
-  limit = 150
+  limit = 2000,
+  zoom?: number
 ) {
   const url = new URL("/api/parcels/in-bounds", window.location.origin);
   url.searchParams.set("county", county);
@@ -35,11 +36,15 @@ export async function fetchParcelsInBounds(
   url.searchParams.set("maxLng", String(bounds.maxLng));
   url.searchParams.set("maxLat", String(bounds.maxLat));
   url.searchParams.set("limit", String(limit));
+  if (typeof zoom === "number") {
+    url.searchParams.set("zoom", String(zoom));
+  }
   if (PARCEL_DEBUG_ENABLED) {
     console.log("[parcel-bbox] request", {
       county,
       bounds,
       limit,
+      zoom,
     });
   }
   try {

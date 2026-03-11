@@ -33,7 +33,14 @@ const DEFAULT_VIEW: PlanBounds = {
 
 export function PlanSvgCanvas({ parcel, result, visibleLayers, resetNonce }: PlanSvgCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    startBounds: PlanBounds;
+  } | null>(null);
   const [viewportAspect, setViewportAspect] = useState(1);
+  const [isPanning, setIsPanning] = useState(false);
   const parcelFeatures = useMemo(() => {
     if (!visibleLayers.includes("parcel")) return [];
     return projectParcelGeometry(parcel);
@@ -109,12 +116,55 @@ export function PlanSvgCanvas({ parcel, result, visibleLayers, resetNonce }: Pla
     setViewBounds((current) => zoomBounds(current, factor));
   }
 
+  function handlePointerDown(event: React.PointerEvent<SVGSVGElement>) {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startBounds: viewBounds,
+    };
+    setIsPanning(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handlePointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    const dragState = dragStateRef.current;
+    const element = containerRef.current;
+    if (!dragState || !element || dragState.pointerId !== event.pointerId) return;
+    const width = element.clientWidth || 1;
+    const height = element.clientHeight || 1;
+    const dx = ((event.clientX - dragState.startX) / width) * dragState.startBounds.width;
+    const dy = ((event.clientY - dragState.startY) / height) * dragState.startBounds.height;
+    setViewBounds({
+      minX: dragState.startBounds.minX - dx,
+      maxX: dragState.startBounds.maxX - dx,
+      minY: dragState.startBounds.minY + dy,
+      maxY: dragState.startBounds.maxY + dy,
+      width: dragState.startBounds.width,
+      height: dragState.startBounds.height,
+    });
+  }
+
+  function handlePointerUp(event: React.PointerEvent<SVGSVGElement>) {
+    if (dragStateRef.current?.pointerId === event.pointerId) {
+      dragStateRef.current = null;
+      setIsPanning(false);
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
   return (
     <div ref={containerRef} className="relative h-full w-full bg-[#e8edef]">
       <svg
-        className="h-full w-full"
+        className={`h-full w-full select-none ${isPanning ? "cursor-grabbing" : "cursor-grab"}`}
         viewBox={`${viewBounds.minX} ${viewBounds.minY} ${viewBounds.width} ${viewBounds.height}`}
         preserveAspectRatio="xMidYMid meet"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={handlePointerUp}
       >
         <defs>
           <pattern id="studio-grid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -428,7 +478,7 @@ export function PlanSvgCanvas({ parcel, result, visibleLayers, resetNonce }: Pla
       </div>
 
       <div className="absolute bottom-5 right-5 z-[460] rounded-[20px] border border-slate-300/90 bg-white/94 px-4 py-3 text-xs uppercase tracking-[0.22em] text-slate-600 shadow-xl shadow-slate-500/10">
-        {hasLots ? "Engine layout rendered" : "Parcel geometry rendered"}
+        {isPanning ? "Panning canvas" : hasLots ? "Drag to pan • engine layout rendered" : "Drag to pan • parcel geometry rendered"}
       </div>
     </div>
   );

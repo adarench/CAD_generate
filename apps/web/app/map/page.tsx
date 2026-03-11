@@ -5,7 +5,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { ClientMapView } from "@/components/ClientMapView";
-import { PARCEL_VIEWPORT_MIN_ZOOM, useParcelViewportQuery } from "@/hooks/useParcelViewportQuery";
+import {
+  PARCEL_VIEWPORT_MIN_ZOOM,
+  parcelViewportLimitForZoom,
+  useParcelViewportQuery,
+} from "@/hooks/useParcelViewportQuery";
 import { fetchParcelByClick, fetchRecentParcels, searchParcelByApn } from "@/lib/api";
 import { COUNTY_DEFAULT_VIEWS, DEFAULT_MAP_COUNTY, DEFAULT_MAP_VIEW } from "@/lib/mapConfig";
 import { PARCEL_DEBUG_ENABLED } from "@/lib/parcelDebug";
@@ -40,8 +44,9 @@ export default function MapPage() {
   const [error, setError] = useState<string | null>(null);
   const [lookupMessage, setLookupMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const visibleParcels = useParcelViewportQuery(county, viewport, 180);
+  const visibleParcels = useParcelViewportQuery(county, viewport);
   const parcelFeatureCount = visibleParcels.data?.length ?? 0;
+  const viewportLimit = parcelViewportLimitForZoom(viewport?.zoom);
 
   const parcelContextGeoJSON = useMemo<GeoJSON.FeatureCollection | null>(() => {
     if (!parcelFeatureCount) {
@@ -102,11 +107,12 @@ export default function MapPage() {
         : "pending",
       requestState: parcelRequestState,
       parcelFeatureCount,
+      viewportLimit,
       parcelLayerFeatureCount,
       layerRendered: parcelLayerFeatureCount > 0 ? "yes" : "no",
       requestError: visibleParcels.error instanceof Error ? visibleParcels.error.message : null,
     }),
-    [county, parcelFeatureCount, parcelLayerFeatureCount, parcelRequestState, viewport, visibleParcels.error]
+    [county, parcelFeatureCount, parcelLayerFeatureCount, parcelRequestState, viewport, viewportLimit, visibleParcels.error]
   );
 
   useEffect(() => {

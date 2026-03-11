@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from time import perf_counter
 
 from schemas import ParcelRecord
 from services.arcgis_parcel_client import ArcGISParcelClient
@@ -28,7 +29,9 @@ class ParcelService:
         max_lng: float,
         max_lat: float,
         limit: int = 150,
+        zoom: float | None = None,
     ) -> list[ParcelRecord]:
+        started_at = perf_counter()
         cached = await self.persistence.search_parcels_by_bounds(
             county=county,
             min_lng=min_lng,
@@ -36,19 +39,10 @@ class ParcelService:
             max_lng=max_lng,
             max_lat=max_lat,
             limit=limit,
+            zoom=zoom,
         )
         if self.persistence.database_enabled and cached:
-            LOGGER.info(
-                "Serving parcel bounds from PostGIS cache",
-                extra={
-                    "county": county,
-                    "min_lng": min_lng,
-                    "min_lat": min_lat,
-                    "max_lng": max_lng,
-                    "max_lat": max_lat,
-                    "count": len(cached),
-                },
-            )
+            self._log_query("postgis", county, len(cached), started_at, limit, zoom)
             return cached
         try:
             live = await self.arcgis.search_by_bounds(
@@ -80,6 +74,7 @@ class ParcelService:
                         "cached_count": len(local_fallback),
                     },
                 )
+                self._log_query("json_fallback", county, len(local_fallback), started_at, limit, zoom)
                 return local_fallback
             if cached:
                 LOGGER.warning(
@@ -93,10 +88,12 @@ class ParcelService:
                         "cached_count": len(cached),
                     },
                 )
+                self._log_query("postgis_fallback", county, len(cached), started_at, limit, zoom)
                 return cached
             raise
         if live:
             await self._cache_records(live, county)
+            self._log_query("arcgis_fallback", county, len(live), started_at, limit, zoom)
             return live
         if cached:
             LOGGER.info(
@@ -110,6 +107,7 @@ class ParcelService:
                     "cached_count": len(cached),
                 },
             )
+            self._log_query("postgis_stale", county, len(cached), started_at, limit, zoom)
             return cached
         local_fallback = self.persistence.search_local_parcels_by_bounds(
             county=county,
@@ -131,6 +129,7 @@ class ParcelService:
                     "cached_count": len(local_fallback),
                 },
             )
+            self._log_query("json_fallback", county, len(local_fallback), started_at, limit, zoom)
             return local_fallback
         return []
 
@@ -170,5 +169,24 @@ class ParcelService:
 
     async def _cache_records(self, records: list[ParcelRecord], county: str) -> None:
         source = self.arcgis.parcel_source(county)
-        for record in records:
-            await self.persistence.save_parcel(record, source=source)
+        await self.persistence.save_parcel_batch(records, source=source, update_json=True)
+
+    def _log_query(
+        self,
+        source: str,
+        county: str,
+        rows: int,
+        started_at: float,
+        limit: int,
+        zoom: float | None,
+    ) -> None:
+        query_time_ms = round((perf_counter() - started_at) * 1000, 2)
+        LOGGER.info(
+            "[parcel_service] source=%s county=%s rows=%s query_time=%sms limit=%s zoom=%s",
+            source,
+            county,
+            rows,
+            query_time_ms,
+            limit,
+            zoom,
+        )

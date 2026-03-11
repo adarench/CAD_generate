@@ -13,8 +13,17 @@ type ViewportBounds = {
 } | null;
 
 export const PARCEL_VIEWPORT_MIN_ZOOM = 9;
+export const DEFAULT_PARCEL_VIEWPORT_LIMIT = 2000;
 
-export function useParcelViewportQuery(county: string, viewport: ViewportBounds, limit = 150) {
+export function parcelViewportLimitForZoom(zoom: number | null | undefined) {
+  if (!zoom) return DEFAULT_PARCEL_VIEWPORT_LIMIT;
+  if (zoom < 11) return 500;
+  if (zoom <= 13) return 2000;
+  return 5000;
+}
+
+export function useParcelViewportQuery(county: string, viewport: ViewportBounds, limit?: number) {
+  const resolvedLimit = limit ?? parcelViewportLimitForZoom(viewport?.zoom);
   return useQuery({
     queryKey: [
       "visible-parcels",
@@ -24,7 +33,7 @@ export function useParcelViewportQuery(county: string, viewport: ViewportBounds,
       viewport?.maxLng,
       viewport?.maxLat,
       viewport?.zoom,
-      limit,
+      resolvedLimit,
     ],
     queryFn: () =>
       fetchParcelsInBounds(
@@ -35,7 +44,8 @@ export function useParcelViewportQuery(county: string, viewport: ViewportBounds,
           maxLng: viewport!.maxLng,
           maxLat: viewport!.maxLat,
         },
-        limit
+        resolvedLimit,
+        viewport!.zoom
       ),
     enabled: Boolean(viewport && viewport.zoom >= PARCEL_VIEWPORT_MIN_ZOOM),
     keepPreviousData: true,
