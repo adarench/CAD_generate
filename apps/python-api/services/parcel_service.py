@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from schemas import ParcelRecord
 from services.arcgis_parcel_client import ArcGISParcelClient
 from services.persistence import PersistenceLayer
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ParcelService:
@@ -16,6 +20,120 @@ class ParcelService:
     async def list_recent_parcels(self, limit: int = 8) -> list[ParcelRecord]:
         return await self.persistence.list_recent_parcels(limit)
 
+    async def search_by_bounds(
+        self,
+        county: str,
+        min_lng: float,
+        min_lat: float,
+        max_lng: float,
+        max_lat: float,
+        limit: int = 150,
+    ) -> list[ParcelRecord]:
+        cached = await self.persistence.search_parcels_by_bounds(
+            county=county,
+            min_lng=min_lng,
+            min_lat=min_lat,
+            max_lng=max_lng,
+            max_lat=max_lat,
+            limit=limit,
+        )
+        if self.persistence.database_enabled and cached:
+            LOGGER.info(
+                "Serving parcel bounds from PostGIS cache",
+                extra={
+                    "county": county,
+                    "min_lng": min_lng,
+                    "min_lat": min_lat,
+                    "max_lng": max_lng,
+                    "max_lat": max_lat,
+                    "count": len(cached),
+                },
+            )
+            return cached
+        try:
+            live = await self.arcgis.search_by_bounds(
+                county=county,
+                min_lng=min_lng,
+                min_lat=min_lat,
+                max_lng=max_lng,
+                max_lat=max_lat,
+                limit=limit,
+            )
+        except RuntimeError:
+            local_fallback = self.persistence.search_local_parcels_by_bounds(
+                county=county,
+                min_lng=min_lng,
+                min_lat=min_lat,
+                max_lng=max_lng,
+                max_lat=max_lat,
+                limit=limit,
+            )
+            if local_fallback:
+                LOGGER.warning(
+                    "Serving JSON parcel bounds after live lookup failed",
+                    extra={
+                        "county": county,
+                        "min_lng": min_lng,
+                        "min_lat": min_lat,
+                        "max_lng": max_lng,
+                        "max_lat": max_lat,
+                        "cached_count": len(local_fallback),
+                    },
+                )
+                return local_fallback
+            if cached:
+                LOGGER.warning(
+                    "Serving cached parcel bounds after live lookup failed",
+                    extra={
+                        "county": county,
+                        "min_lng": min_lng,
+                        "min_lat": min_lat,
+                        "max_lng": max_lng,
+                        "max_lat": max_lat,
+                        "cached_count": len(cached),
+                    },
+                )
+                return cached
+            raise
+        if live:
+            await self._cache_records(live, county)
+            return live
+        if cached:
+            LOGGER.info(
+                "Serving cached parcel bounds because live lookup returned no records",
+                extra={
+                    "county": county,
+                    "min_lng": min_lng,
+                    "min_lat": min_lat,
+                    "max_lng": max_lng,
+                    "max_lat": max_lat,
+                    "cached_count": len(cached),
+                },
+            )
+            return cached
+        local_fallback = self.persistence.search_local_parcels_by_bounds(
+            county=county,
+            min_lng=min_lng,
+            min_lat=min_lat,
+            max_lng=max_lng,
+            max_lat=max_lat,
+            limit=limit,
+        )
+        if local_fallback:
+            LOGGER.info(
+                "Serving JSON parcel bounds because live lookup returned no records",
+                extra={
+                    "county": county,
+                    "min_lng": min_lng,
+                    "min_lat": min_lat,
+                    "max_lng": max_lng,
+                    "max_lat": max_lat,
+                    "cached_count": len(local_fallback),
+                },
+            )
+            return local_fallback
+        return []
+
     async def search_by_apn(self, county: str, apn: str) -> list[ParcelRecord]:
         cached = await self.persistence.search_parcels_by_apn(county, apn)
         if cached:
@@ -23,14 +141,28 @@ class ParcelService:
         live = await self.arcgis.search_by_apn(county, apn)
         if live:
             await self._cache_records(live, county)
-        return live
+            return live
+        return self.persistence.search_local_parcels_by_apn(county, apn)
 
     async def search_by_point(self, county: str, lng: float, lat: float) -> list[ParcelRecord]:
+        cached = await self.persistence.search_parcels_by_point(county, lng, lat)
+        if self.persistence.database_enabled and cached:
+            LOGGER.info(
+                "Serving parcel point lookup from PostGIS cache",
+                extra={"county": county, "lng": lng, "lat": lat, "count": len(cached)},
+            )
+            return cached
         live = await self.arcgis.search_by_point(county, lng, lat)
-        if not live:
-            return []
-        await self._cache_records(live, county)
-        return live
+        if live:
+            await self._cache_records(live, county)
+            return live
+        if cached:
+            LOGGER.warning(
+                "Serving cached parcel point lookup after live lookup returned no records",
+                extra={"county": county, "lng": lng, "lat": lat, "cached_count": len(cached)},
+            )
+            return cached
+        return self.persistence.search_local_parcels_by_point(county, lng, lat)
 
     async def ensure_cached(self, parcel: ParcelRecord) -> ParcelRecord:
         await self.persistence.save_parcel(parcel, source=self.arcgis.parcel_source(parcel.county))

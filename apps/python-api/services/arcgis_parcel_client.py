@@ -11,13 +11,12 @@ import httpx
 from shapely.geometry import shape
 
 from schemas import ParcelRecord, ParcelSourceRecord
+from services.parcel_adapter import geometry_area_sqft
 
 LOGGER = logging.getLogger(__name__)
 
 UGRC_BASE = "https://services1.arcgis.com/99lidPhWCzftIe9K/ArcGIS/rest/services"
 DEMO_PARCEL_PATH = Path("apps/web/data/demoParcel.json")
-AREA_SQFT_PER_SQM = 10.76391041671
-
 COUNTY_OVERRIDES = {
     "salt lake": "SaltLake",
     "san juan": "SanJuan",
@@ -86,6 +85,64 @@ class ArcGISParcelClient:
             return records
         return await self._maybe_fallback(county, lng=lng, lat=lat)
 
+    async def search_by_bounds(
+        self,
+        county: str,
+        min_lng: float,
+        min_lat: float,
+        max_lng: float,
+        max_lat: float,
+        limit: int = 150,
+    ) -> list[ParcelRecord]:
+        geometry = json.dumps(
+            {
+                "xmin": min_lng,
+                "ymin": min_lat,
+                "xmax": max_lng,
+                "ymax": max_lat,
+                "spatialReference": {"wkid": 4326},
+            }
+        )
+        try:
+            payload = await self._query_features(
+                county,
+                where="1=1",
+                extra_params={
+                    "geometry": geometry,
+                    "geometryType": "esriGeometryEnvelope",
+                    "spatialRel": "esriSpatialRelIntersects",
+                    "inSR": "4326",
+                    "resultRecordCount": str(limit),
+                    "orderByFields": "Shape__Area ASC",
+                },
+            )
+            records = self._normalize_response(payload, county)
+            print(
+                "[parcel-bounds-source]",
+                {
+                    "county": county,
+                    "minLng": min_lng,
+                    "minLat": min_lat,
+                    "maxLng": max_lng,
+                    "maxLat": max_lat,
+                    "limit": limit,
+                    "count": len(records),
+                },
+            )
+            return records
+        except httpx.HTTPError as exc:
+            LOGGER.exception(
+                "Parcel bounds lookup failed",
+                extra={
+                    "county": county,
+                    "min_lng": min_lng,
+                    "min_lat": min_lat,
+                    "max_lng": max_lng,
+                    "max_lat": max_lat,
+                },
+            )
+            raise RuntimeError(f"Parcel source unavailable for {county} County.") from exc
+
     def parcel_source(self, county: str) -> ParcelSourceRecord:
         service_url = self._service_url(county)
         return ParcelSourceRecord(
@@ -149,9 +206,7 @@ class ArcGISParcelClient:
                 continue
             shapely_geom = shape(geometry)
             centroid = shapely_geom.centroid
-            area_sqft = None
-            if isinstance(properties.get("Shape__Area"), (float, int)):
-                area_sqft = float(properties["Shape__Area"]) * AREA_SQFT_PER_SQM
+            area_sqft = round(geometry_area_sqft(geometry), 2)
             address = " ".join(
                 part
                 for part in [
@@ -174,7 +229,7 @@ class ArcGISParcelClient:
                     sourceObjectId=string_or_none(properties.get("OBJECTID")),
                     geometryGeoJSON=geometry,
                     centroid={"lng": centroid.x, "lat": centroid.y},
-                    areaSqft=round(area_sqft, 2) if area_sqft else None,
+                    areaSqft=area_sqft if area_sqft else None,
                     areaAcres=round(area_sqft / 43560.0, 4) if area_sqft else None,
                     address=address or None,
                     ownerName=None,

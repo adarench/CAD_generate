@@ -24,6 +24,7 @@ from schemas import (
     TopologyEnum,
     TopologySummary,
 )
+from services.concept_instruction_service import ConceptInstructionService
 from services.parcel_adapter import adapt_parcel_geometry, lot_label_to_geojson, polygon2d_to_geojson
 from services.parcel_service import ParcelService
 from services.persistence import PersistenceLayer
@@ -37,19 +38,25 @@ class OptimizerService:
     def __init__(self):
         self.persistence = PersistenceLayer()
         self.parcels = ParcelService()
+        self.concepts = ConceptInstructionService()
 
     async def optimize(self, request: OptimizationRequest) -> RunDetail:
         parcel = await self._resolve_parcel(request)
         adapted = adapt_parcel_geometry(parcel.geometryGeoJSON.model_dump())
         boundary = [list(coord) for coord in adapted.parcel_polygon.exterior.coords[:-1]]
-        constraints = self._build_constraints(request, boundary)
-        zoning = ZoningRules(
-            min_frontage_ft=float(request.designConstraints.get("minFrontage", 60)),
-            min_depth_ft=float(request.designConstraints.get("minDepth", 110)),
-            min_area_sqft=float(request.designConstraints.get("minArea", 6000)),
+        resolved_constraints, preferred, resolved_strict, instruction, concept_summary = self.concepts.apply(
+            request.designConstraints,
+            request.topologyPreferences,
+            request.strictTopology,
+            request.conceptText,
         )
-        preferred = self._preferred_topologies(request)
-        allowed = preferred if request.strictTopology and preferred else None
+        constraints = self._build_constraints(resolved_constraints, boundary)
+        zoning = ZoningRules(
+            min_frontage_ft=float(resolved_constraints.get("minFrontage", 60)),
+            min_depth_ft=float(resolved_constraints.get("minDepth", 110)),
+            min_area_sqft=float(resolved_constraints.get("minArea", 6000)),
+        )
+        allowed = preferred if resolved_strict and preferred else None
         result = optimize_yield(constraints, zoning, allowed_topologies=allowed)
         summary = summarize_layout(constraints, zoning, result.best_layout)
         run_id = str(uuid4())
@@ -65,8 +72,11 @@ class OptimizerService:
             candidateSummary=self._candidate_summaries(
                 result=result,
                 preferred_topologies=preferred,
-                strict_topology=request.strictTopology,
+                strict_topology=resolved_strict,
             ),
+            resolvedConstraints=resolved_constraints,
+            conceptSummary=concept_summary,
+            appliedInstruction=instruction,
             resultGeoJSON=self._geometry_to_geojson(result.best_layout, adapted.projection),
             exports=exports,
         )
@@ -75,9 +85,14 @@ class OptimizerService:
             parcelId=parcel.id,
             status=RunStatus.completed,
             parcel=parcel,
-            inputConstraints=request.designConstraints,
-            topologyPreferences=[pref.value for pref in request.topologyPreferences],
-            strictTopology=request.strictTopology,
+            inputConstraints={
+                **resolved_constraints,
+                "conceptText": request.conceptText,
+                "conceptInstruction": instruction.model_dump(mode="json") if instruction else None,
+                "conceptSummary": concept_summary,
+            },
+            topologyPreferences=preferred or [pref.value for pref in request.topologyPreferences],
+            strictTopology=resolved_strict,
             createdAt=datetime.now(timezone.utc),
             response=response,
         )
@@ -86,6 +101,9 @@ class OptimizerService:
 
     async def get_run(self, run_id: str) -> RunDetail | None:
         return await self.persistence.get_run(run_id)
+
+    async def get_latest_run_for_parcel(self, parcel_id: str) -> RunDetail | None:
+        return await self.persistence.get_latest_run_for_parcel(parcel_id)
 
     async def list_runs(self, limit: int = 10) -> list[RunSummary]:
         return await self.persistence.list_runs(limit)
@@ -142,16 +160,16 @@ class OptimizerService:
         return {"type": "FeatureCollection", "features": features}
 
     def _build_constraints(
-        self, request: OptimizationRequest, boundary: list[list[float]]
+        self, design_constraints: dict[str, object], boundary: list[list[float]]
     ) -> SubdivisionConstraints:
         return SubdivisionConstraints(
             parcel=Parcel(shape="polygon", boundary=boundary, area_acres=None, aspect_ratio=1.5),
-            lots=Lots(count=int(request.designConstraints.get("lotCount", 24))),
+            lots=Lots(count=int(design_constraints.get("lotCount", 24))),
             road=Road(
-                orientation=request.designConstraints.get("roadOrientation", "north_south"),
-                width_ft=float(request.designConstraints.get("roadWidth", 40)),
+                orientation=str(design_constraints.get("roadOrientation", "north_south")),
+                width_ft=float(design_constraints.get("roadWidth", 40)),
             ),
-            easement=Easement(width_ft=float(request.designConstraints.get("easementWidth", 12))),
+            easement=Easement(width_ft=float(design_constraints.get("easementWidth", 12))),
         )
 
     def _preferred_topologies(self, request: OptimizationRequest) -> list[str]:

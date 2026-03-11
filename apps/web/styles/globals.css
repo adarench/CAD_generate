@@ -21,3 +21,68 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  background: #020617;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+.leaflet-container.discovery-map {
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.7), transparent 24%),
+    linear-gradient(180deg, #eff4f6 0%, #d9e3e8 100%);
+}
+
+.leaflet-container.studio-map {
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.88), transparent 32%),
+    linear-gradient(180deg, #eef2f4 0%, #dde4e8 100%);
+}
+
+.studio-grid-overlay {
+  background-image:
+    linear-gradient(rgba(15, 23, 42, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.025) 1px, transparent 1px),
+    linear-gradient(rgba(15, 23, 42, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.06) 1px, transparent 1px);
+  background-position: -1px -1px;
+  background-size: 24px 24px, 24px 24px, 96px 96px, 96px 96px;
+}
+
+.lot-label {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-shadow:
+    0 0 10px rgba(255, 255, 255, 0.92),
+    0 0 6px rgba(255, 255, 255, 0.82);
+}
+
+.parcel-apn-tooltip,
+.parcel-apn-label {
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  border-radius: 999px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12);
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 6px 10px;
+  text-transform: uppercase;
+}
+
+.parcel-apn-tooltip {
+  background: rgba(248, 250, 252, 0.96);
+}
+
+.parcel-apn-label {
+  background: rgba(255, 247, 237, 0.98);
+  border-color: rgba(249, 115, 22, 0.4);
+  color: #9a3412;
+}

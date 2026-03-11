@@ -42,6 +42,11 @@ def adapt_parcel_geometry(geometry_geojson: dict[str, Any]) -> AdaptedParcel:
     return AdaptedParcel(parcel_polygon=local, projection=projection)
 
 
+def geometry_area_sqft(geometry_geojson: dict[str, Any]) -> float:
+    adapted = adapt_parcel_geometry(geometry_geojson)
+    return float(adapted.parcel_polygon.area)
+
+
 def to_local_feet(lng: float, lat: float, projection: ParcelProjection) -> tuple[float, float]:
     return (
         (lng - projection.origin_lng) * projection.feet_per_degree_lng,

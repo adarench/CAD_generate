@@ -71,6 +71,7 @@ python3 -m uvicorn main:app --app-dir apps/python-api --host 127.0.0.1 --port 80
 - `GET /api/health`
 - `GET /api/parcels/search?county=Salt%20Lake&apn=12345678`
 - `GET /api/parcels/by-click?county=Salt%20Lake&lng=-111.89&lat=40.30`
+- `GET /api/parcels/in-bounds?county=Salt%20Lake&minLng=...&minLat=...&maxLng=...&maxLat=...`
 - `GET /api/parcels/{parcelId}`
 - `GET /api/parcels/recent`
 - `POST /api/optimize`
@@ -98,7 +99,7 @@ Open:
 
 - open `/map`
 - choose a Utah county
-- search by APN or click the map
+- search by APN, click the map, or pan/zoom into a county viewport to load live parcel outlines
 - review the normalized parcel drawer
 - open the planner
 
@@ -124,6 +125,35 @@ The backend ArcGIS client lives in [apps/python-api/services/arcgis_parcel_clien
 
 The client normalizes the ArcGIS payload into the canonical parcel schema and caches the result in Postgres or the local JSON fallback if the database is unavailable.
 
+## PostGIS-first Parcel Loading
+
+When `DATABASE_URL` is set, parcel reads now follow this order:
+
+1. PostGIS spatial/APN/point query
+2. live UGRC ArcGIS fetch only if PostGIS misses
+3. persist live results back into PostGIS and the JSON cache
+4. JSON cache fallback only if the live source fails or returns no records
+
+That makes the intended production path:
+
+```text
+Leaflet viewport
+-> Next.js parcel proxy
+-> FastAPI
+-> PostGIS spatial query
+-> normalized parcel GeoJSON
+-> map render
+```
+
+### Backfill PostGIS from the local parcel cache
+
+If you already have parcels in `apps/python-api/data/parcels.json`, seed them into PostGIS with:
+
+```bash
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54329/subdivision \
+python3 apps/python-api/scripts/backfill_postgis_parcels.py
+```
+
 ## Validation
 
 Validated locally during development:
@@ -133,6 +163,7 @@ Validated locally during development:
 - `GET /api/health` returns `{"status":"ok"}`
 - live APN lookup for Salt Lake County parcel `22282760130000`
 - live map-click parcel lookup near `(-111.83684683892612, 40.61985292120375)`
+- live in-bounds parcel retrieval for the active Salt Lake County viewport
 - PostGIS parcel cache verified with SQL row counts
 - live optimize request saved run `e132edc2-8288-41f8-9551-a4e3d40a9629`
 - saved run fetch returning stored geometry and metadata

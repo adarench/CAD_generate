@@ -39,6 +39,17 @@ export type CandidateSummary = {
   notes?: string | null;
 };
 
+export type ConceptInstruction = {
+  topologyPreferences?: ("parallel" | "spine" | "loop" | "culdesac" | "all")[];
+  excludedTopologies?: ("parallel" | "spine" | "loop" | "culdesac" | "all")[];
+  topologyMode?: "prefer" | "strict";
+  densityIntent?: "maximize" | "moderate" | "low" | null;
+  roadIntent?: string | null;
+  lotIntent?: string | null;
+  edgeConditions?: string[];
+  notes?: string | null;
+};
+
 export type OptimizationResponse = {
   runId: string;
   winningTopology: string;
@@ -48,6 +59,9 @@ export type OptimizationResponse = {
   developableAreaSqft: number;
   averageLotAreaSqft: number;
   candidateSummary: CandidateSummary[];
+  resolvedConstraints?: Record<string, unknown>;
+  conceptSummary?: string | null;
+  appliedInstruction?: ConceptInstruction | null;
   resultGeoJSON: GeoJSON.FeatureCollection;
   exports: Record<string, string>;
 };

@@ -58,12 +58,24 @@ class OptimizationParcelPayload(BaseModel):
     fetchedAt: datetime
 
 
+class ConceptInstruction(BaseModel):
+    topologyPreferences: List[TopologyEnum] = Field(default_factory=list)
+    excludedTopologies: List[TopologyEnum] = Field(default_factory=list)
+    topologyMode: Literal["prefer", "strict"] = "prefer"
+    densityIntent: Optional[Literal["maximize", "moderate", "low"]] = None
+    roadIntent: Optional[str] = None
+    lotIntent: Optional[str] = None
+    edgeConditions: List[str] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+
 class OptimizationRequest(BaseModel):
     parcelId: Optional[str] = None
     parcel: Optional[OptimizationParcelPayload] = None
     designConstraints: dict[str, Any] = Field(default_factory=dict)
     topologyPreferences: List[TopologyEnum] = Field(default_factory=lambda: [TopologyEnum.all])
     strictTopology: bool = False
+    conceptText: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_parcel_input(self) -> "OptimizationRequest":
@@ -91,6 +103,9 @@ class OptimizationResponse(BaseModel):
     developableAreaSqft: float
     averageLotAreaSqft: float
     candidateSummary: List[TopologySummary]
+    resolvedConstraints: dict[str, Any] = Field(default_factory=dict)
+    conceptSummary: Optional[str] = None
+    appliedInstruction: Optional[ConceptInstruction] = None
     resultGeoJSON: dict[str, Any]
     exports: dict[str, str]
 

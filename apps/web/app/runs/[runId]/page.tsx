@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { MapView } from "@/components/MapView";
+import { PlanSvgCanvas } from "@/components/studio/PlanSvgCanvas";
 import { fetchRun } from "@/lib/api";
 
 interface RunProps {
@@ -18,7 +18,7 @@ export default function RunPage({ params }: RunProps) {
     queryKey: ["run", params.runId],
     queryFn: () => fetchRun(params.runId),
   });
-  const [visibleLayers, setVisibleLayers] = useState<string[]>([...layerOptions]);
+  const [visibleLayers, setVisibleLayers] = useState<(typeof layerOptions)[number][]>([...layerOptions]);
 
   const run = runQuery.data;
   const response = run?.response;
@@ -27,19 +27,9 @@ export default function RunPage({ params }: RunProps) {
     Boolean(run?.topologyPreferences?.length) &&
     !run?.strictTopology &&
     !run.topologyPreferences.includes(response.winningTopology);
-  const filteredResult = useMemo(() => {
-    if (!response?.resultGeoJSON) return null;
-    return {
-      ...response.resultGeoJSON,
-      features: response.resultGeoJSON.features.filter((feature) =>
-        visibleLayers.includes(String(feature.properties?.layer))
-      ),
-    };
-  }, [response, visibleLayers]);
-
   return (
-    <div className="grid min-h-[calc(100vh-72px)] grid-cols-[320px_minmax(0,1fr)_380px]">
-      <aside className="border-r border-slate-800 bg-slate-950/75 p-5">
+    <div className="grid h-[calc(100vh-72px)] overflow-hidden grid-cols-[320px_minmax(0,1fr)_380px]">
+      <aside className="overflow-y-auto border-r border-slate-800 bg-slate-950/75 p-5">
         <Panel title="Saved run">
           <h1 className="text-xl font-semibold text-slate-100">{params.runId}</h1>
           <div className="mt-4 space-y-2 text-sm text-slate-300">
@@ -49,22 +39,42 @@ export default function RunPage({ params }: RunProps) {
             <p>Status: {run?.status ?? "Loading..."}</p>
             <p>Saved: {run?.createdAt ? new Date(run.createdAt).toLocaleString() : "—"}</p>
           </div>
+          {run?.parcelId ? (
+            <Link
+              href={`/studio/${run.parcelId}`}
+              className="mt-4 inline-flex rounded-2xl border border-cyan-400/40 px-4 py-2 text-sm font-semibold text-cyan-300"
+            >
+              Open parcel in Studio
+            </Link>
+          ) : null}
         </Panel>
 
         <Panel title="Run inputs">
+          {"conceptText" in (run?.inputConstraints ?? {}) ? (
+            <div className="mb-4 rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm leading-7 text-slate-200">
+              {String(run?.inputConstraints?.conceptText ?? "")}
+            </div>
+          ) : null}
           <div className="space-y-2 text-sm text-slate-300">
-            {Object.entries(run?.inputConstraints ?? {}).map(([key, value]) => (
-              <div key={key} className="flex justify-between gap-3 rounded-xl bg-slate-950/60 px-3 py-2">
-                <span className="text-slate-500">{key}</span>
-                <span>{String(value)}</span>
-              </div>
-            ))}
+            {Object.entries(run?.inputConstraints ?? {})
+              .filter(([key]) => !["conceptText", "conceptInstruction", "conceptSummary"].includes(key))
+              .map(([key, value]) => (
+                <div key={key} className="flex justify-between gap-3 rounded-xl bg-slate-950/60 px-3 py-2">
+                  <span className="text-slate-500">{key}</span>
+                  <span>{String(value)}</span>
+                </div>
+              ))}
           </div>
           <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3 text-sm text-slate-300">
             Topologies: {(run?.topologyPreferences ?? []).join(", ") || "all"}
             <br />
             Strict mode: {run?.strictTopology ? "enabled" : "disabled"}
           </div>
+          {run?.response?.conceptSummary || run?.inputConstraints?.conceptSummary ? (
+            <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-3 text-sm text-emerald-100">
+              {String(run?.response?.conceptSummary ?? run?.inputConstraints?.conceptSummary ?? "")}
+            </div>
+          ) : null}
         </Panel>
 
         <Panel title="Layer controls">
@@ -102,15 +112,16 @@ export default function RunPage({ params }: RunProps) {
         </Link>
       </aside>
 
-      <section className="min-h-[720px] border-r border-slate-800">
-        <MapView
-          parcelGeometry={run?.parcel?.geometryGeoJSON ?? null}
-          center={run?.parcel?.centroid ?? null}
-          resultGeoJSON={filteredResult}
+      <section className="min-h-0 border-r border-slate-800 bg-[#dde4e8]">
+        <PlanSvgCanvas
+          parcel={run?.parcel}
+          result={response ?? null}
+          visibleLayers={visibleLayers}
+          resetNonce={0}
         />
       </section>
 
-      <aside className="bg-slate-950/85 p-5">
+      <aside className="overflow-y-auto bg-slate-950/85 p-5">
         <Panel title="Summary">
           <div className="space-y-2 text-sm text-slate-300">
             <p>Winning topology: {response?.winningTopology ?? "—"}</p>

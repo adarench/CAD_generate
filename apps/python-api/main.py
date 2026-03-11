@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -16,6 +17,7 @@ from services.optimization_service import OptimizerService
 from services.parcel_service import ParcelService
 
 app = FastAPI(title="Utah Subdivision API", version="0.2.0")
+LOGGER = logging.getLogger(__name__)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,6 +54,14 @@ async def get_run(run_id: str):
     return run
 
 
+@app.get("/api/parcels/{parcel_id}/latest-run", response_model=RunDetail)
+async def get_latest_run_for_parcel(parcel_id: str):
+    run = await service.get_latest_run_for_parcel(parcel_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No saved runs found for parcel")
+    return run
+
+
 @app.get("/api/runs", response_model=list[RunSummary])
 async def list_runs(limit: int = Query(default=10, ge=1, le=50)):
     return await service.list_runs(limit)
@@ -82,6 +92,42 @@ async def parcel_by_click(lng: float, lat: float, county: str):
 @app.get("/api/parcels/recent", response_model=list[ParcelRecord])
 async def recent_parcels(limit: int = Query(default=8, ge=1, le=20)):
     return await parcel_service.list_recent_parcels(limit)
+
+
+@app.get("/api/parcels/in-bounds", response_model=list[ParcelRecord])
+async def parcels_in_bounds(
+    county: str,
+    minLng: float,
+    minLat: float,
+    maxLng: float,
+    maxLat: float,
+    limit: int = Query(default=150, ge=1, le=300),
+):
+    try:
+        parcels = await parcel_service.search_by_bounds(
+            county=county,
+            min_lng=minLng,
+            min_lat=minLat,
+            max_lng=maxLng,
+            max_lat=maxLat,
+            limit=limit,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    print(
+        "[parcel-bounds]",
+        {
+            "county": county,
+            "minLng": minLng,
+            "minLat": minLat,
+            "maxLng": maxLng,
+            "maxLat": maxLat,
+            "limit": limit,
+            "count": len(parcels),
+        },
+    )
+    return parcels
 
 
 @app.get("/api/parcels/{parcel_id}", response_model=ParcelRecord)

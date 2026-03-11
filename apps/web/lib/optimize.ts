@@ -10,11 +10,14 @@ export type PlannerConstraints = {
   roadOrientation: "north_south" | "east_west";
 };
 
+export type PlannerConstraintOverrides = Partial<PlannerConstraints>;
+
 export async function runOptimizationApi(
   parcel: ParcelRecord,
-  constraints: PlannerConstraints,
+  constraints: PlannerConstraintOverrides,
   topologyPreferences: string[],
-  strictTopology: boolean
+  strictTopology: boolean,
+  conceptText?: string
 ) {
   const response = await fetch("/api/optimization", {
     method: "POST",
@@ -24,6 +27,7 @@ export async function runOptimizationApi(
       designConstraints: constraints,
       topologyPreferences,
       strictTopology,
+      conceptText,
     }),
   });
   if (!response.ok) {

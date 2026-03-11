@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 
 import "@/styles/globals.css";
-import "maplibre-gl/dist/maplibre-gl.css";
+import "leaflet/dist/leaflet.css";
 
 import { Providers } from "./providers";
 
@@ -34,7 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     Home
                   </Link>
                   <Link href="/map" className="transition hover:text-emerald-300">
-                    Parcel Map
+                    Discovery
                   </Link>
                   <Link href="/runs" className="transition hover:text-emerald-300">
                     Runs
