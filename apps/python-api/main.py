@@ -7,6 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from schemas import (
+    LayoutGenerateRequest,
+    LayoutGenerateResponse,
+    LayoutResultSummary,
     OptimizationRequest,
     OptimizationResponse,
     ParcelLookupResponse,
@@ -14,7 +17,9 @@ from schemas import (
     RunDetail,
     RunSummary,
 )
+from services.layout_engine.layout_search import run_layout_search
 from services.optimization_service import OptimizerService
+from services.parcel_adapter import adapt_parcel_geometry, to_lnglat
 from services.parcel_service import ParcelService
 
 app = FastAPI(title="Utah Subdivision API", version="0.2.0")
@@ -132,6 +137,58 @@ async def parcels_in_bounds(
         },
     )
     return parcels
+
+
+@app.post("/api/layout/generate", response_model=LayoutGenerateResponse)
+async def layout_generate(request: LayoutGenerateRequest):
+    try:
+        adapted = adapt_parcel_geometry(request.parcel.geometry.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    proj = adapted.projection
+    area_sqft = float(adapted.parcel_polygon.area)
+
+    def _to_lnglat(x_ft: float, y_ft: float):
+        return list(to_lnglat(x_ft, y_ft, proj))
+
+    candidates = run_layout_search(
+        parcel_polygon=adapted.parcel_polygon,
+        area_sqft=area_sqft,
+        to_lnglat=_to_lnglat,
+        n_candidates=request.nCandidates,
+        n_top=request.nTop,
+        seed=request.seed,
+        road_width_ft=request.roadWidthFt,
+        lot_depth=request.lotDepthFt,
+        min_frontage_ft=request.minFrontageFt,
+        use_prior=request.usePrior,
+    )
+
+    if not candidates:
+        raise HTTPException(status_code=422, detail="No viable layouts could be generated for this parcel.")
+
+    summaries = [
+        LayoutResultSummary(
+            rank=c.rank,
+            generatorType=c.network.generator_type,
+            score=round(c.score, 4),
+            lotCount=c.result.metrics.get("lot_count", 0),
+            totalRoadFt=c.result.metrics.get("total_road_ft", 0.0),
+            totalLotAreaSqft=c.result.metrics.get("total_lot_area_sqft", 0.0),
+            avgLotAreaSqft=c.result.metrics.get("avg_lot_area_sqft", 0.0),
+            devAreaRatio=c.result.metrics.get("dev_area_ratio", 0.0),
+        )
+        for c in candidates
+    ]
+
+    return LayoutGenerateResponse(
+        parcelId=request.parcel.id,
+        areaAcres=round(area_sqft / 43560.0, 3),
+        results=summaries,
+        topResultGeoJSON=candidates[0].geojson,
+        priorUsed=candidates[0].network is not None,
+    )
 
 
 @app.get("/api/parcels/{parcel_id}", response_model=ParcelRecord)

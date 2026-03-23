@@ -1,0 +1,31 @@
+{
+  "strategy": {
+    "road_type": "culdesac",
+    "entry_point": "south",
+    "culdesac_count": 1,
+    "density_goal": "low"
+  },
+  "network_topology": "culdesac",
+  "network_orientation": "north_south",
+  "summary": {
+    "parcel_width_ft": 808.33,
+    "parcel_height_ft": 538.89,
+    "parcel_area_sqft": 435600.0,
+    "requested_lot_count": 8,
+    "generated_lot_count": 2,
+    "road_width_ft": 40.0,
+    "easement_width_ft": 10.0,
+    "min_frontage_ft": 60.0,
+    "min_depth_ft": 110.0,
+    "min_area_sqft": 6000.0,
+    "road_offset_ft": -100.0,
+    "road_count": 2,
+    "road_length_ft": 525.44,
+    "network_type": "culdesac",
+    "developable_area_sqft": 413708.07,
+    "average_lot_area_sqft": 11853.7
+  },
+  "score": 1.8994860881542701,
+  "parcel_vertices": null,
+  "lot_count": 2
+}

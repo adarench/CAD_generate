@@ -1,0 +1,31 @@
+{
+  "strategy": {
+    "road_type": "spine",
+    "entry_point": "south",
+    "culdesac_count": 0,
+    "density_goal": "medium"
+  },
+  "network_topology": "spine",
+  "network_orientation": "north_south",
+  "summary": {
+    "parcel_width_ft": 808.33,
+    "parcel_height_ft": 538.89,
+    "parcel_area_sqft": 435600.0,
+    "requested_lot_count": 16,
+    "generated_lot_count": 2,
+    "road_width_ft": 40.0,
+    "easement_width_ft": 10.0,
+    "min_frontage_ft": 60.0,
+    "min_depth_ft": 110.0,
+    "min_area_sqft": 6000.0,
+    "road_offset_ft": -120.0,
+    "road_count": 5,
+    "road_length_ft": 4756.38,
+    "network_type": "spine",
+    "developable_area_sqft": 291111.43,
+    "average_lot_area_sqft": 42258.24
+  },
+  "score": 1.3365997704315886,
+  "parcel_vertices": null,
+  "lot_count": 2
+}

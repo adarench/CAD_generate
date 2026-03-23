@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 
-const BACKEND_URL = process.env.PYTHON_API_URL ?? "http://127.0.0.1:8000";
+const BEDROCK_URL = process.env.BEDROCK_API_URL ?? process.env.PYTHON_API_URL ?? "http://127.0.0.1:8000";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const response = await fetch(`${BACKEND_URL}/api/runs?limit=${url.searchParams.get("limit") ?? "10"}`, {
+  const query = url.searchParams.toString();
+  const response = await fetch(`${BEDROCK_URL}/runs${query ? `?${query}` : ""}`, {
     cache: "no-store",
   });
-  const body = await response.text();
-  return new NextResponse(body, {
+
+  return new NextResponse(await response.text(), {
     status: response.status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": response.headers.get("content-type") ?? "application/json" },
   });
 }

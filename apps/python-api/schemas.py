@@ -162,3 +162,37 @@ class ParcelLookupResponse(BaseModel):
     selected: Optional[ParcelRecord] = None
     candidates: List[ParcelRecord] = Field(default_factory=list)
     message: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Layout Engine schemas
+# ---------------------------------------------------------------------------
+
+class LayoutGenerateRequest(BaseModel):
+    parcel: OptimizationParcelPayload
+    nCandidates: int = Field(default=24, ge=4, le=60)
+    nTop: int = Field(default=3, ge=1, le=10)
+    seed: int = Field(default=0, ge=0)
+    roadWidthFt: float = Field(default=32.0, ge=16.0, le=80.0)
+    lotDepthFt: float = Field(default=110.0, ge=50.0, le=250.0)
+    minFrontageFt: float = Field(default=50.0, ge=25.0, le=150.0)
+    usePrior: bool = True
+
+
+class LayoutResultSummary(BaseModel):
+    rank: int
+    generatorType: str
+    score: float
+    lotCount: int
+    totalRoadFt: float
+    totalLotAreaSqft: float
+    avgLotAreaSqft: float
+    devAreaRatio: float
+
+
+class LayoutGenerateResponse(BaseModel):
+    parcelId: str
+    areaAcres: float
+    results: List[LayoutResultSummary]
+    topResultGeoJSON: dict[str, Any]
+    priorUsed: bool

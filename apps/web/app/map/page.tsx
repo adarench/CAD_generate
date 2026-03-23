@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
@@ -12,6 +13,14 @@ import {
 } from "@/hooks/useParcelViewportQuery";
 import { fetchParcelByClick, fetchRecentParcels, searchParcelByApn } from "@/lib/api";
 import { COUNTY_DEFAULT_VIEWS, DEFAULT_MAP_COUNTY, DEFAULT_MAP_VIEW } from "@/lib/mapConfig";
+import {
+  assessOpportunity,
+  DEFAULT_OPPORTUNITY_FILTERS,
+  opportunityBadgeLabel,
+  summarizeOpportunity,
+  type OpportunityAssessment,
+  type OpportunityFilterState,
+} from "@/lib/opportunity";
 import { PARCEL_DEBUG_ENABLED } from "@/lib/parcelDebug";
 import type { ParcelRecord } from "@/lib/parcels";
 import { SUPPORTED_UTAH_COUNTIES } from "@/services/parcels/arcgisParcelClient";
@@ -19,6 +28,7 @@ import { SUPPORTED_UTAH_COUNTIES } from "@/services/parcels/arcgisParcelClient";
 const counties = [...SUPPORTED_UTAH_COUNTIES];
 
 export default function MapPage() {
+  const router = useRouter();
   const recentParcels = useQuery({
     queryKey: ["recent-parcels-map"],
     queryFn: () => fetchRecentParcels(6),
@@ -44,9 +54,26 @@ export default function MapPage() {
   const [error, setError] = useState<string | null>(null);
   const [lookupMessage, setLookupMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [opportunityFilters, setOpportunityFilters] = useState<OpportunityFilterState>(DEFAULT_OPPORTUNITY_FILTERS);
   const visibleParcels = useParcelViewportQuery(county, viewport);
   const parcelFeatureCount = visibleParcels.data?.length ?? 0;
   const viewportLimit = parcelViewportLimitForZoom(viewport?.zoom);
+
+  const opportunityAssessments = useMemo(() => {
+    const entries = new Map<string, OpportunityAssessment>();
+    for (const parcel of visibleParcels.data ?? []) {
+      entries.set(parcel.id, assessOpportunity(parcel, opportunityFilters));
+    }
+    return entries;
+  }, [opportunityFilters, visibleParcels.data]);
+
+  const visibleOpportunityParcels = useMemo(
+    () =>
+      (visibleParcels.data ?? [])
+        .filter((parcel) => opportunityAssessments.get(parcel.id)?.likelyCandidate)
+        .sort((a, b) => (opportunityAssessments.get(b.id)?.score ?? 0) - (opportunityAssessments.get(a.id)?.score ?? 0)),
+    [opportunityAssessments, visibleParcels.data]
+  );
 
   const parcelContextGeoJSON = useMemo<GeoJSON.FeatureCollection | null>(() => {
     if (!parcelFeatureCount) {
@@ -59,11 +86,14 @@ export default function MapPage() {
         properties: {
           id: parcel.id,
           apn: parcel.apn,
+          opportunityCandidate: opportunityAssessments.get(parcel.id)?.likelyCandidate ?? false,
+          opportunityTier: opportunityAssessments.get(parcel.id)?.tier ?? "none",
+          opportunityScore: opportunityAssessments.get(parcel.id)?.score ?? 0,
         },
         geometry: parcel.geometryGeoJSON,
       })),
     };
-  }, [parcelFeatureCount, visibleParcels.data]);
+  }, [opportunityAssessments, parcelFeatureCount, visibleParcels.data]);
 
   const parcelLayerFeatureCount = parcelContextGeoJSON?.features.length ?? 0;
   const parcelRequestState = useMemo(() => {
@@ -114,6 +144,9 @@ export default function MapPage() {
     }),
     [county, parcelFeatureCount, parcelLayerFeatureCount, parcelRequestState, viewport, viewportLimit, visibleParcels.error]
   );
+  const selectedOpportunity = selectedParcel
+    ? opportunityAssessments.get(selectedParcel.id) ?? assessOpportunity(selectedParcel, opportunityFilters)
+    : null;
 
   useEffect(() => {
     if (!viewport) return;
@@ -215,6 +248,7 @@ export default function MapPage() {
     setCandidateParcels([clicked]);
     setLookupMessage("Parcel selected directly from the live GIS layer.");
     setError(null);
+    router.push(`/studio/${clicked.id}`);
   }
 
   useEffect(() => {
@@ -281,6 +315,59 @@ export default function MapPage() {
             </div>
           </DiscoveryPanel>
 
+          <DiscoveryPanel title="Opportunity filter" eyebrow="Heuristic screening">
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm leading-7 text-slate-300">
+                Heuristic only. This first pass uses acreage, address presence, and any available land-use or zoning fields. It does not yet know building footprints or assessor improvement values.
+              </div>
+              <label className="block">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">Minimum acreage</div>
+                <input
+                  type="range"
+                  min="0"
+                  max="20"
+                  step="0.5"
+                  value={opportunityFilters.minAcreage}
+                  onChange={(event) =>
+                    setOpportunityFilters((current) => ({
+                      ...current,
+                      minAcreage: Number(event.target.value),
+                    }))
+                  }
+                  className="mt-3 w-full accent-cyan-400"
+                />
+                <div className="mt-2 text-sm text-slate-300">{opportunityFilters.minAcreage.toFixed(1)} acres</div>
+              </label>
+              <ToggleRow
+                label="Likely undeveloped only"
+                description="Uses missing address first, but keeps larger acreage parcels in play as heuristic opportunities."
+                checked={opportunityFilters.likelyUndevelopedOnly}
+                onChange={(checked) =>
+                  setOpportunityFilters((current) => ({ ...current, likelyUndevelopedOnly: checked }))
+                }
+              />
+              <ToggleRow
+                label="Residential-compatible only"
+                description="Only excludes explicit non-residential signals. Missing zoning remains heuristic."
+                checked={opportunityFilters.residentialCompatibleOnly}
+                onChange={(checked) =>
+                  setOpportunityFilters((current) => ({ ...current, residentialCompatibleOnly: checked }))
+                }
+              />
+              <ToggleRow
+                label="Hide tiny developed lots"
+                description="Suppresses addressed sub-1 acre lots that are unlikely first-pass development targets."
+                checked={opportunityFilters.hideTinyDevelopedLots}
+                onChange={(checked) =>
+                  setOpportunityFilters((current) => ({ ...current, hideTinyDevelopedLots: checked }))
+                }
+              />
+              <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/8 px-4 py-3 text-sm text-cyan-100">
+                {visibleOpportunityParcels.length} likely candidates in the current viewport
+              </div>
+            </div>
+          </DiscoveryPanel>
+
           <DiscoveryPanel title="Recent parcels" eyebrow="Ready for Studio">
             <div className="space-y-3">
               {(recentParcels.data ?? []).map((parcel) => (
@@ -343,6 +430,39 @@ export default function MapPage() {
             </div>
           </DiscoveryPanel>
 
+          <DiscoveryPanel title="Opportunity shortlist" eyebrow="Visible candidates">
+            <div className="space-y-3">
+              {visibleOpportunityParcels.slice(0, 6).map((parcel) => {
+                const assessment = opportunityAssessments.get(parcel.id)!;
+                return (
+                  <button
+                    key={parcel.id}
+                    className="w-full rounded-2xl border border-cyan-400/20 bg-cyan-400/8 px-4 py-3 text-left transition hover:border-cyan-300/50"
+                    onClick={() => {
+                      setSelectedParcel(parcel);
+                      setCandidateParcels([parcel]);
+                      setLookupMessage("Loaded from the visible opportunity shortlist.");
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="font-semibold text-slate-100">{parcel.apn ?? parcel.id}</div>
+                      <span className="rounded-full border border-cyan-400/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
+                        {opportunityBadgeLabel(assessment)}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-sm text-slate-300">{parcel.areaAcres?.toFixed(2) ?? "—"} acres</div>
+                    <div className="mt-1 text-xs leading-6 text-slate-400">{summarizeOpportunity(assessment)}</div>
+                  </button>
+                );
+              })}
+              {!visibleOpportunityParcels.length ? (
+                <div className="rounded-2xl border border-dashed border-slate-700 px-4 py-6 text-sm text-slate-500">
+                  No parcels in view pass the current heuristic. Relax the filters or pan to a different area.
+                </div>
+              ) : null}
+            </div>
+          </DiscoveryPanel>
+
           {lookupMessage ? (
             <div className="mt-4 rounded-2xl border border-cyan-400/30 bg-cyan-400/10 p-4 text-sm text-cyan-100">
               {lookupMessage}
@@ -364,6 +484,7 @@ export default function MapPage() {
             onViewportIdle={setViewport}
             parcelGeometry={selectedParcel?.geometryGeoJSON ?? null}
             contextGeoJSON={parcelContextGeoJSON}
+            resultGeoJSON={null}
             center={selectedParcel?.centroid ?? null}
             viewState={mapView}
             hoveredParcelId={hoveredParcelId}
@@ -380,6 +501,9 @@ export default function MapPage() {
           <div className="absolute left-5 top-20 z-[450] rounded-[22px] border border-slate-900 bg-slate-950/96 px-4 py-3 text-xs uppercase tracking-[0.22em] text-slate-100 shadow-xl shadow-slate-950/60">
             {mapStatus.state === "ready" ? "GIS ready" : "Loading GIS"} • Zoom {viewport?.zoom?.toFixed(1) ?? "—"} •{" "}
             {parcelFeatureCount} parcels visible
+          </div>
+          <div className="absolute left-5 top-36 z-[450] rounded-[22px] border border-cyan-400/20 bg-slate-950/96 px-4 py-3 text-xs uppercase tracking-[0.22em] text-cyan-100 shadow-xl shadow-slate-950/60">
+            {visibleOpportunityParcels.length} heuristic opportunities highlighted
           </div>
           <div className="absolute right-5 top-5 z-[450] flex items-start gap-3">
             {mapDebug.requestError ? (
@@ -440,14 +564,16 @@ export default function MapPage() {
             </p>
 
             {selectedParcel ? (
-              <Link
-                href={`/studio/${selectedParcel.id}`}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-5 inline-flex w-full items-center justify-center rounded-[24px] bg-cyan-400 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-300"
-              >
-                Open in Studio
-              </Link>
+              <div className="mt-5 flex flex-col gap-3">
+                <Link
+                  href={`/studio/${selectedParcel.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex w-full items-center justify-center rounded-[24px] bg-cyan-400 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-300"
+                >
+                  Open in Studio
+                </Link>
+              </div>
             ) : null}
 
             <div className="mt-5 grid gap-3 text-sm text-slate-300">
@@ -460,12 +586,37 @@ export default function MapPage() {
               <DetailRow label="Source object ID" value={selectedParcel?.sourceObjectId ?? "—"} />
               <DetailRow label="Zoning" value={selectedParcel?.zoningCode ?? "Enrichment pending"} />
             </div>
+
+            {selectedParcel && selectedOpportunity ? (
+              <div className="mt-5 rounded-[24px] border border-cyan-400/20 bg-cyan-400/8 p-4">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-300">
+                  Opportunity heuristic
+                </div>
+                <div className="mt-2 text-sm font-semibold text-slate-100">{opportunityBadgeLabel(selectedOpportunity)}</div>
+                <p className="mt-2 text-sm leading-7 text-slate-300">{summarizeOpportunity(selectedOpportunity)}</p>
+                <ul className="mt-3 space-y-2 text-sm text-slate-300">
+                  {selectedOpportunity.reasons.map((reason) => (
+                    <li key={reason}>• {reason}</li>
+                  ))}
+                  {selectedOpportunity.warnings.map((warning) => (
+                    <li key={warning} className="text-amber-200">
+                      • {warning}
+                    </li>
+                  ))}
+                  {selectedOpportunity.failedFilters.map((failure) => (
+                    <li key={failure} className="text-red-200">
+                      • {failure}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </DiscoveryPanel>
 
           <DiscoveryPanel title="Studio handoff" eyebrow="Normalized parcel ID">
             <p className="text-sm leading-7 text-slate-300">
-              Studio loads the cached normalized parcel record directly by ID. The design environment starts
-              with the parcel boundary already framed and ready for prompt-first concept generation.
+              Studio loads the canonical parcel record by ID and runs the full Bedrock pipeline from
+              parcel through feasibility. Discovery is now only the browsing and selection surface.
             </p>
           </DiscoveryPanel>
         </aside>
@@ -503,6 +654,33 @@ function DetailRow({ label, value }: { label: string; value: string }) {
       <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">{label}</div>
       <div className="mt-1 text-sm text-slate-200">{value}</div>
     </div>
+  );
+}
+
+function ToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
+      <input
+        type="checkbox"
+        className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-950 text-cyan-400 focus:ring-cyan-400"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <div>
+        <div className="text-sm font-semibold text-slate-100">{label}</div>
+        <div className="mt-1 text-xs leading-6 text-slate-400">{description}</div>
+      </div>
+    </label>
   );
 }
 

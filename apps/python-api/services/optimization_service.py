@@ -56,8 +56,16 @@ class OptimizerService:
             min_depth_ft=float(resolved_constraints.get("minDepth", 110)),
             min_area_sqft=float(resolved_constraints.get("minArea", 6000)),
         )
-        allowed = preferred if resolved_strict and preferred else None
-        result = optimize_yield(constraints, zoning, allowed_topologies=allowed)
+        result, fallback_details = self._optimize_for_topologies(
+            constraints=constraints,
+            zoning=zoning,
+            preferred_topologies=preferred,
+            strict_topology=resolved_strict,
+        )
+        if fallback_details and concept_summary:
+            concept_summary = f"{concept_summary} Fallback used because {fallback_details}."
+        elif fallback_details:
+            concept_summary = f"Fallback used because {fallback_details}."
         summary = summarize_layout(constraints, zoning, result.best_layout)
         run_id = str(uuid4())
         exports = self._write_exports(run_id, result.best_layout)
@@ -73,6 +81,7 @@ class OptimizerService:
                 result=result,
                 preferred_topologies=preferred,
                 strict_topology=resolved_strict,
+                fallback_details=fallback_details,
             ),
             resolvedConstraints=resolved_constraints,
             conceptSummary=concept_summary,
@@ -90,6 +99,7 @@ class OptimizerService:
                 "conceptText": request.conceptText,
                 "conceptInstruction": instruction.model_dump(mode="json") if instruction else None,
                 "conceptSummary": concept_summary,
+                "fallbackDetails": fallback_details,
             },
             topologyPreferences=preferred or [pref.value for pref in request.topologyPreferences],
             strictTopology=resolved_strict,
@@ -182,6 +192,7 @@ class OptimizerService:
         result,
         preferred_topologies: list[str],
         strict_topology: bool,
+        fallback_details: str | None = None,
     ) -> list[TopologySummary]:
         grouped: dict[str, dict[str, float]] = defaultdict(
             lambda: {
@@ -220,8 +231,8 @@ class OptimizerService:
                 status = "not-tested"
 
             notes = None
-            if fallback_winner and not strict_topology:
-                notes = "Fallback used. A non-preferred topology produced the winning yield."
+            if fallback_winner and fallback_details and not strict_topology:
+                notes = f"Fallback used. {fallback_details}."
             elif requested and values["candidatesTested"] == 0:
                 notes = "Requested topology produced no valid candidates for this parcel."
             elif strict_topology and requested and not winner:
@@ -239,6 +250,35 @@ class OptimizerService:
                 )
             )
         return summaries
+
+    def _optimize_for_topologies(
+        self,
+        constraints: SubdivisionConstraints,
+        zoning: ZoningRules,
+        preferred_topologies: list[str],
+        strict_topology: bool,
+    ):
+        if not preferred_topologies:
+            return optimize_yield(constraints, zoning, allowed_topologies=None), None
+
+        try:
+            # Respect preferred topology families whenever they can produce a valid layout.
+            return (
+                optimize_yield(
+                    constraints,
+                    zoning,
+                    allowed_topologies=preferred_topologies,
+                ),
+                None,
+            )
+        except ValueError:
+            if strict_topology:
+                raise
+            fallback_reason = (
+                f"preferred topology set ({', '.join(preferred_topologies)}) produced no valid layouts"
+            )
+            result = optimize_yield(constraints, zoning, allowed_topologies=None)
+            return result, fallback_reason
 
     def _write_exports(self, run_id: str, layout) -> dict[str, str]:
         run_dir = EXPORT_ROOT / run_id

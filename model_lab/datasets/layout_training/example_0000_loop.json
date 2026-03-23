@@ -1,0 +1,31 @@
+{
+  "strategy": {
+    "road_type": "loop",
+    "entry_point": "south",
+    "culdesac_count": 0,
+    "density_goal": "medium"
+  },
+  "network_topology": "loop",
+  "network_orientation": "north_south",
+  "summary": {
+    "parcel_width_ft": 808.33,
+    "parcel_height_ft": 538.89,
+    "parcel_area_sqft": 435600.0,
+    "requested_lot_count": 16,
+    "generated_lot_count": 8,
+    "road_width_ft": 40.0,
+    "easement_width_ft": 10.0,
+    "min_frontage_ft": 60.0,
+    "min_depth_ft": 110.0,
+    "min_area_sqft": 6000.0,
+    "road_offset_ft": 0.0,
+    "road_count": 2,
+    "road_length_ft": 1212.5,
+    "network_type": "loop",
+    "developable_area_sqft": 355572.39,
+    "average_lot_area_sqft": 18349.96
+  },
+  "score": 6.530255096418733,
+  "parcel_vertices": null,
+  "lot_count": 8
+}

@@ -1,12 +1,10 @@
 import { NextResponse } from "next/server";
-
-const BACKEND_URL = process.env.PYTHON_API_URL ?? "http://127.0.0.1:8000";
+import { fetchParcelById } from "@/app/api/parcels/_lib";
 
 export async function GET(_request: Request, { params }: { params: { id: string } }) {
-  const response = await fetch(`${BACKEND_URL}/api/parcels/${params.id}`, { cache: "no-store" });
-  const body = await response.text();
-  return new NextResponse(body, {
-    status: response.status,
-    headers: { "content-type": "application/json" },
-  });
+  const parcel = await fetchParcelById(params.id);
+  if (!parcel) {
+    return NextResponse.json({ error: "Parcel not found" }, { status: 404 });
+  }
+  return NextResponse.json(parcel);
 }

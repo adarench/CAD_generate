@@ -1,4 +1,4 @@
-import type { OptimizationResponse, ParcelRecord } from "@/lib/parcels";
+import type { LayoutVisualizationResult, StudioParcelRecord } from "@/lib/parcels";
 
 const FEET_PER_DEGREE_LAT = 364000;
 
@@ -19,7 +19,22 @@ export type PlanPointGeometry = {
   coordinates: PlanPoint;
 };
 
-export type PlanGeometry = PlanPolygon | PlanMultiPolygon | PlanPointGeometry;
+export type PlanLineString = {
+  type: "LineString";
+  coordinates: PlanPoint[];
+};
+
+export type PlanMultiLineString = {
+  type: "MultiLineString";
+  lines: PlanPoint[][];
+};
+
+export type PlanGeometry =
+  | PlanPolygon
+  | PlanMultiPolygon
+  | PlanPointGeometry
+  | PlanLineString
+  | PlanMultiLineString;
 
 export type PlanFeature = {
   id: string;
@@ -44,7 +59,7 @@ type PlanProjection = {
   feetPerDegreeLat: number;
 };
 
-export function projectParcelGeometry(parcel: ParcelRecord | null | undefined): PlanFeature[] {
+export function projectParcelGeometry(parcel: StudioParcelRecord | null | undefined): PlanFeature[] {
   if (!parcel) return [];
   const projection = projectionFromParcel(parcel);
   const geometry = projectGeometry(parcel.geometryGeoJSON, projection);
@@ -59,8 +74,8 @@ export function projectParcelGeometry(parcel: ParcelRecord | null | undefined): 
 }
 
 export function projectResultGeometry(
-  parcel: ParcelRecord | null | undefined,
-  result: OptimizationResponse | null | undefined,
+  parcel: StudioParcelRecord | null | undefined,
+  result: LayoutVisualizationResult | null | undefined,
   visibleLayers: string[]
 ): PlanFeature[] {
   if (!parcel || !result?.resultGeoJSON) return [];
@@ -118,6 +133,12 @@ export function featurePathData(feature: PlanFeature): string | null {
   if (feature.geometry.type === "Polygon") {
     return polygonPath(feature.geometry.rings);
   }
+  if (feature.geometry.type === "LineString") {
+    return linePath(feature.geometry.coordinates);
+  }
+  if (feature.geometry.type === "MultiLineString") {
+    return feature.geometry.lines.map((line) => linePath(line)).join(" ");
+  }
   return feature.geometry.polygons.map((polygon) => polygonPath(polygon)).join(" ");
 }
 
@@ -132,7 +153,11 @@ function polygonPath(rings: PlanPoint[][]): string {
     .join(" ");
 }
 
-function projectionFromParcel(parcel: ParcelRecord): PlanProjection {
+function linePath(points: PlanPoint[]): string {
+  return points.map((point, index) => `${index === 0 ? "M" : "L"} ${point[0]} ${point[1]}`).join(" ");
+}
+
+function projectionFromParcel(parcel: StudioParcelRecord): PlanProjection {
   const feetPerDegreeLng = FEET_PER_DEGREE_LAT * Math.cos((parcel.centroid.lat * Math.PI) / 180);
   return {
     originLng: parcel.centroid.lng,
@@ -143,7 +168,12 @@ function projectionFromParcel(parcel: ParcelRecord): PlanProjection {
 }
 
 function projectGeometry(
-  geometry: GeoJSON.Geometry | GeoJSON.Polygon | GeoJSON.MultiPolygon,
+  geometry:
+    | GeoJSON.Geometry
+    | GeoJSON.Polygon
+    | GeoJSON.MultiPolygon
+    | GeoJSON.LineString
+    | GeoJSON.MultiLineString,
   projection: PlanProjection
 ): PlanGeometry {
   if (geometry.type === "Polygon") {
@@ -166,6 +196,18 @@ function projectGeometry(
       coordinates: toPlanPoint(geometry.coordinates, projection),
     };
   }
+  if (geometry.type === "LineString") {
+    return {
+      type: "LineString",
+      coordinates: geometry.coordinates.map((point) => toPlanPoint(point, projection)),
+    };
+  }
+  if (geometry.type === "MultiLineString") {
+    return {
+      type: "MultiLineString",
+      lines: geometry.coordinates.map((line) => line.map((point) => toPlanPoint(point, projection))),
+    };
+  }
   throw new Error(`Unsupported Studio plan geometry type: ${geometry.type}`);
 }
 
@@ -180,6 +222,16 @@ function toPlanPoint(point: number[], projection: PlanProjection): PlanPoint {
 function* iterateGeometryPoints(geometry: PlanGeometry): Generator<PlanPoint> {
   if (geometry.type === "Point") {
     yield geometry.coordinates;
+    return;
+  }
+  if (geometry.type === "LineString") {
+    yield* geometry.coordinates;
+    return;
+  }
+  if (geometry.type === "MultiLineString") {
+    for (const line of geometry.lines) {
+      yield* line;
+    }
     return;
   }
   if (geometry.type === "Polygon") {

@@ -1,0 +1,31 @@
+{
+  "strategy": {
+    "road_type": "parallel",
+    "entry_point": "south",
+    "culdesac_count": 0,
+    "density_goal": "high"
+  },
+  "network_topology": "parallel",
+  "network_orientation": "north_south",
+  "summary": {
+    "parcel_width_ft": 808.33,
+    "parcel_height_ft": 538.89,
+    "parcel_area_sqft": 435600.0,
+    "requested_lot_count": 24,
+    "generated_lot_count": 18,
+    "road_width_ft": 40.0,
+    "easement_width_ft": 10.0,
+    "min_frontage_ft": 60.0,
+    "min_depth_ft": 110.0,
+    "min_area_sqft": 6000.0,
+    "road_offset_ft": -120.0,
+    "road_count": 2,
+    "road_length_ft": 2086.11,
+    "network_type": "parallel",
+    "developable_area_sqft": 392488.98,
+    "average_lot_area_sqft": 9879.61
+  },
+  "score": 16.21855289256198,
+  "parcel_vertices": null,
+  "lot_count": 18
+}

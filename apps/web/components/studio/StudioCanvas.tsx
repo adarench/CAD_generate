@@ -1,18 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ClientMapView } from "@/components/ClientMapView";
 import { PlanSvgCanvas } from "@/components/studio/PlanSvgCanvas";
 import type { BasemapMode } from "@/lib/mapConfig";
-import type { OptimizationResponse, ParcelRecord } from "@/lib/parcels";
+import type { LayoutVisualizationResult, StudioParcelRecord } from "@/lib/parcels";
 
 export const STUDIO_LAYER_OPTIONS = ["parcel", "road", "easements", "lots", "lot_labels"] as const;
 export type StudioLayerKey = (typeof STUDIO_LAYER_OPTIONS)[number];
 
 interface StudioCanvasProps {
-  parcel: ParcelRecord | null | undefined;
-  result: OptimizationResponse | null;
+  parcel: StudioParcelRecord | null | undefined;
+  result: LayoutVisualizationResult | null;
   visibleLayers: StudioLayerKey[];
   basemapMode: BasemapMode;
   resetNonce: number;
@@ -32,6 +32,8 @@ export function StudioCanvas({
   onResetView,
 }: StudioCanvasProps) {
   const [showLayerMenu, setShowLayerMenu] = useState(false);
+  const [effectiveBasemapMode, setEffectiveBasemapMode] = useState<BasemapMode>(basemapMode);
+  const [basemapNotice, setBasemapNotice] = useState<string | null>(null);
   const filteredResult = useMemo(() => {
     if (!result?.resultGeoJSON) return null;
     return {
@@ -42,8 +44,23 @@ export function StudioCanvas({
     };
   }, [result, visibleLayers]);
 
-  const canvasKey = `${parcel?.id ?? "studio"}-${resetNonce}`;
-  const showPlanCanvas = basemapMode === "drawing";
+  useEffect(() => {
+    setEffectiveBasemapMode(basemapMode);
+    setBasemapNotice(null);
+  }, [basemapMode]);
+
+  const canvasKey = `${parcel?.id ?? "studio"}-${resetNonce}-${effectiveBasemapMode}`;
+  const showPlanCanvas = effectiveBasemapMode === "drawing";
+
+  function handleBasemapFailure(mode: "gis" | "aerial", message?: string) {
+    if (mode === "aerial") {
+      setEffectiveBasemapMode("gis");
+      setBasemapNotice(message ?? "Aerial basemap unavailable. Showing GIS context instead.");
+      return;
+    }
+    setEffectiveBasemapMode("drawing");
+    setBasemapNotice(message ?? "GIS basemap unavailable. Showing drawing mode instead.");
+  }
 
   return (
     <div className="relative flex-1 overflow-hidden bg-[#dde4e8]">
@@ -63,8 +80,15 @@ export function StudioCanvas({
             parcelGeometry={parcel?.geometryGeoJSON ?? null}
             center={parcel?.centroid ?? null}
             resultGeoJSON={filteredResult}
-            basemapMode={basemapMode}
+            basemapMode={effectiveBasemapMode}
             visualMode="studio"
+            onBasemapStateChange={(state) => {
+              if (state.status === "error") {
+                handleBasemapFailure(state.mode, state.message);
+              } else if (state.status === "ready") {
+                setBasemapNotice(null);
+              }
+            }}
           />
         </>
       )}
@@ -75,7 +99,7 @@ export function StudioCanvas({
         </div>
         <div className="flex flex-wrap gap-1.5">
           {(["drawing", "gis", "aerial"] as BasemapMode[]).map((mode) => {
-            const active = basemapMode === mode;
+            const active = effectiveBasemapMode === mode;
             return (
               <button
                 key={mode}
@@ -135,14 +159,20 @@ export function StudioCanvas({
         </div>
       ) : null}
 
+      {basemapNotice ? (
+        <div className="absolute right-5 top-5 z-[450] max-w-sm rounded-[20px] border border-amber-300/80 bg-amber-50/95 px-4 py-3 text-sm text-amber-900 shadow-lg shadow-amber-200/30 backdrop-blur">
+          {basemapNotice}
+        </div>
+      ) : null}
+
       <div className="absolute bottom-5 left-5 z-[450] rounded-[24px] border border-slate-300/80 bg-white/90 px-4 py-3 shadow-xl shadow-slate-500/10 backdrop-blur">
         <div className="text-[10px] font-semibold uppercase tracking-[0.26em] text-slate-500">
           Canvas mode
         </div>
         <div className="mt-2 text-sm text-slate-700">
-          {basemapMode === "drawing"
-            ? "Parcel-first concept canvas"
-            : basemapMode === "aerial"
+          {effectiveBasemapMode === "drawing"
+            ? "Parcel-first feasibility drawing"
+            : effectiveBasemapMode === "aerial"
               ? "Aerial context enabled"
               : "GIS context enabled"}
         </div>

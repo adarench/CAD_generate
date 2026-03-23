@@ -48,14 +48,14 @@ export default function HomePage() {
           <div className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-cyan-300">
             Discovery + Studio
           </div>
-          <h1 className="mt-6 max-w-5xl text-5xl font-semibold leading-tight text-slate-50">
-            A two-surface land feasibility product: parcel discovery on GIS, concept generation in a
-            dedicated planning Studio.
-          </h1>
+            <h1 className="mt-6 max-w-5xl text-5xl font-semibold leading-tight text-slate-50">
+              A two-surface land feasibility product: parcel discovery on GIS, Bedrock feasibility
+              execution in a dedicated Studio.
+            </h1>
           <p className="mt-5 max-w-4xl text-lg leading-8 text-slate-300">
-            Utah Subdivision Studio separates parcel intake from design work. Use the GIS Discovery layer
-            to find and inspect real parcels, then open a CAD-style Studio workspace for prompt-first
-            subdivision feasibility and export-ready geometry.
+            Utah Subdivision Studio separates parcel intake from analysis. Use the GIS Discovery layer
+            to find and inspect real parcels, then open a CAD-style Studio workspace for Bedrock-backed
+            layout visualization and feasibility reporting.
           </p>
           <div className="mt-8 flex flex-wrap gap-4">
             <Link
@@ -98,12 +98,12 @@ export default function HomePage() {
               <SurfaceCard
                 eyebrow="Surface B"
                 title="Studio Workspace"
-                description="Load a normalized parcel into a CAD-style design canvas, enter a concept prompt, adjust optional parameters, run optimization, and export geometry."
+                description="Load a normalized parcel into a CAD-style analysis canvas, run the canonical Bedrock pipeline, and inspect returned layout geometry plus feasibility outputs."
                 bullets={[
-                  "Prompt-first design input",
-                  "Parameter-assisted controls",
-                  "CAD-style geometry canvas",
-                  "DXF / STEP / GeoJSON exports",
+                  "Canonical pipeline execution",
+                  "Layout visualization",
+                  "Feasibility reporting",
+                  "Saved run retrieval",
                 ]}
                 href={apnResult ? `/studio/${apnResult}` : `/studio/${DEFAULT_STUDIO_DEMO_PARCEL_ID}`}
                 cta={apnResult ? "Open Studio" : "Open Studio Demo"}
@@ -118,7 +118,7 @@ export default function HomePage() {
                 Use APN lookup to jump directly into the Studio route for a normalized parcel record.
               </p>
               <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
-                Demo parcel ready: {DEFAULT_STUDIO_DEMO_APN} in Salt Lake County with prior high-yield Studio runs.
+                Demo parcel ready: {DEFAULT_STUDIO_DEMO_APN} in Salt Lake County for a Bedrock-backed feasibility run.
               </div>
               <div className="mt-4 flex flex-wrap gap-3">
                 <select
@@ -183,10 +183,10 @@ export default function HomePage() {
               subtitle="Saved concept plans and exports"
               emptyText="Saved runs will appear after Studio generation."
               items={(recentRuns.data ?? []).map((run) => ({
-                id: run.runId,
-                title: `${run.winningTopology} • ${run.lotCount} lots`,
-                detail: `${run.county ?? "UT"} • ${run.parcelApn ?? run.parcelId}`,
-                href: `/runs/${run.runId}`,
+                id: run.run_id,
+                title: `${run.units ?? 0} units • ${formatPercent(run.ROI)}`,
+                detail: `${run.parcel_id ?? "parcel"} • ${formatCurrency(run.projected_profit)}`,
+                href: `/runs/${run.run_id}`,
               }))}
             />
           </div>
@@ -194,6 +194,16 @@ export default function HomePage() {
       </div>
     </section>
   );
+}
+
+function formatCurrency(value: number | null | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "—";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "—";
+  return `${(value * 100).toFixed(1)}% ROI`;
 }
 
 function SurfaceCard({

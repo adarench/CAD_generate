@@ -1,0 +1,23 @@
+[
+  {
+    "version": 2,
+    "model_path": "model_lab/models/graph_prior_v2.pkl",
+    "timestamp": "2026-03-12T22:42:22.418251+00:00",
+    "model_name": "GradientBoosting",
+    "dataset_size": 1474,
+    "dataset_sources": {
+      "synthetic": 1474
+    },
+    "metrics": {
+      "r2_test": 0.739,
+      "top5_retention": 0.8831,
+      "top10_retention": 0.8745,
+      "rank_accuracy": 0.1667,
+      "n_test": 302,
+      "gb_r2": 0.739,
+      "rf_r2": 0.6233,
+      "train_sec": 1.2
+    },
+    "notes": "auto-retrain  include_experience=False"
+  }
+]

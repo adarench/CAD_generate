@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { OptimizationResponse, ParcelRecord } from "@/lib/parcels";
+import type { LayoutVisualizationResult, StudioParcelRecord } from "@/lib/parcels";
 import {
   boundsForPlanFeatures,
   featurePathData,
@@ -16,8 +16,8 @@ import {
 type StudioLayerKey = "parcel" | "road" | "easements" | "lots" | "lot_labels";
 
 interface PlanSvgCanvasProps {
-  parcel: ParcelRecord | null | undefined;
-  result: OptimizationResponse | null;
+  parcel: StudioParcelRecord | null | undefined;
+  result: LayoutVisualizationResult | null;
   visibleLayers: StudioLayerKey[];
   resetNonce: number;
 }
@@ -618,8 +618,8 @@ function layerStyle(layer: string, hasLabel = false) {
         stroke: "#0f172a",
         strokeOpacity: 1,
         strokeWidth: 1.8,
-        fill: "#111827",
-        fillOpacity: 0.96,
+        fill: "none",
+        fillOpacity: 0,
       };
     case "easements":
       return {

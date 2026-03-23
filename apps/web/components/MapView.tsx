@@ -1,7 +1,7 @@
 "use client";
 
 import L, { type LeafletMouseEvent, type PathOptions } from "leaflet";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { GeoJSON, MapContainer, Pane, TileLayer, ZoomControl, useMap, useMapEvents } from "react-leaflet";
 
 import type { BasemapMode, MapViewState } from "@/lib/mapConfig";
@@ -41,6 +41,11 @@ interface MapViewProps {
   basemapMode?: BasemapMode;
   visualMode?: MapVisualMode;
   onMapStatusChange?: (status: { state: "booting" | "ready" | "error"; message?: string }) => void;
+  onBasemapStateChange?: (state: {
+    mode: Exclude<BasemapMode, "drawing">;
+    status: "loading" | "ready" | "error";
+    message?: string;
+  }) => void;
 }
 
 const EMPTY_COLLECTION: FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -93,6 +98,7 @@ export function MapView({
   basemapMode = "gis",
   visualMode = "discovery",
   onMapStatusChange,
+  onBasemapStateChange,
 }: MapViewProps) {
   const parcelCollection = useMemo<FeatureCollection>(() => {
     if (!parcelGeometry) {
@@ -149,18 +155,10 @@ export function MapView({
         whenReady={() => onMapStatusChange?.({ state: "ready" })}
       >
         {basemapConfig ? (
-          <TileLayer
-            attribution={basemapConfig.attribution}
-            opacity={basemapConfig.opacity ?? 1}
-            subdomains={basemapConfig.subdomains}
-            url={basemapConfig.url}
-          />
-        ) : null}
-        {basemapConfig?.referenceUrl ? (
-          <TileLayer
-            attribution={basemapConfig.referenceAttribution ?? basemapConfig.attribution}
-            opacity={basemapConfig.referenceOpacity ?? 1}
-            url={basemapConfig.referenceUrl}
+          <BasemapTileLayers
+            basemapMode={basemapMode as Exclude<BasemapMode, "drawing">}
+            config={basemapConfig}
+            onBasemapStateChange={onBasemapStateChange}
           />
         ) : null}
         <ZoomControl position="topright" />
@@ -178,7 +176,7 @@ export function MapView({
           {contextGeoJSON?.features.length ? (
             <GeoJSON
               data={contextGeoJSON as any}
-              style={() => contextStyle(visualMode)}
+              style={(feature) => contextStyle(feature, visualMode)}
               onEachFeature={(feature, layer) => {
                 layer.on({
                   mouseover: () => onParcelHover?.(String(feature.properties?.id ?? null)),
@@ -267,6 +265,73 @@ export function MapView({
         </Pane>
       </MapContainer>
     </div>
+  );
+}
+
+function BasemapTileLayers({
+  basemapMode,
+  config,
+  onBasemapStateChange,
+}: {
+  basemapMode: Exclude<BasemapMode, "drawing">;
+  config: {
+    url: string;
+    attribution: string;
+    subdomains?: string[];
+    referenceUrl?: string;
+    referenceAttribution?: string;
+    opacity?: number;
+    referenceOpacity?: number;
+  };
+  onBasemapStateChange?: (state: {
+    mode: Exclude<BasemapMode, "drawing">;
+    status: "loading" | "ready" | "error";
+    message?: string;
+  }) => void;
+}) {
+  const readyNotifiedRef = useRef(false);
+  const errorNotifiedRef = useRef(false);
+
+  useEffect(() => {
+    readyNotifiedRef.current = false;
+    errorNotifiedRef.current = false;
+    onBasemapStateChange?.({ mode: basemapMode, status: "loading" });
+  }, [basemapMode, onBasemapStateChange]);
+
+  return (
+    <>
+      <TileLayer
+        key={`${basemapMode}-base`}
+        attribution={config.attribution}
+        opacity={config.opacity ?? 1}
+        subdomains={config.subdomains}
+        url={config.url}
+        eventHandlers={{
+          load: () => {
+            if (readyNotifiedRef.current) return;
+            readyNotifiedRef.current = true;
+            onBasemapStateChange?.({ mode: basemapMode, status: "ready" });
+          },
+          tileerror: () => {
+            if (errorNotifiedRef.current) return;
+            errorNotifiedRef.current = true;
+            onBasemapStateChange?.({
+              mode: basemapMode,
+              status: "error",
+              message: `${basemapMode === "aerial" ? "Aerial" : "GIS"} basemap tiles failed to load.`,
+            });
+          },
+        }}
+      />
+      {config.referenceUrl ? (
+        <TileLayer
+          key={`${basemapMode}-reference`}
+          attribution={config.referenceAttribution ?? config.attribution}
+          opacity={config.referenceOpacity ?? 1}
+          url={config.referenceUrl}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -406,7 +471,9 @@ function bindSelectedParcelLabel(feature: GeoJSON.Feature, layer: L.Layer) {
   });
 }
 
-function contextStyle(visualMode: MapVisualMode): PathOptions {
+function contextStyle(feature: GeoJSON.Feature | undefined, visualMode: MapVisualMode): PathOptions {
+  const opportunityCandidate = Boolean(feature?.properties?.opportunityCandidate);
+  const opportunityTier = String(feature?.properties?.opportunityTier ?? "none");
   if (visualMode === "studio") {
     return {
       color: "#94a3b8",
@@ -414,6 +481,15 @@ function contextStyle(visualMode: MapVisualMode): PathOptions {
       opacity: 0.55,
       fillColor: "#cbd5e1",
       fillOpacity: 0.03,
+    };
+  }
+  if (opportunityCandidate) {
+    return {
+      color: opportunityTier === "high" ? "#f59e0b" : opportunityTier === "medium" ? "#22d3ee" : "#38bdf8",
+      weight: opportunityTier === "high" ? 2.8 : 2.2,
+      opacity: 0.95,
+      fillColor: opportunityTier === "high" ? "#f59e0b" : "#22d3ee",
+      fillOpacity: opportunityTier === "high" ? 0.12 : 0.08,
     };
   }
   return CONTEXT_STYLE;
