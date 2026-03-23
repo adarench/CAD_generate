@@ -9,3 +9,13 @@ dist/
 build/
 apps/python-api/data/exports/
 apps/python-api/data/*.json
+
+# Generated/runtime artifacts
+.pgdata-subdivision/
+.pgrun/
+.pipeline-cache/
+*.db
+*.sqlite
+*.bin
+*.pkl
+*.pt
