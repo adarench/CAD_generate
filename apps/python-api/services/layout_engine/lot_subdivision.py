@@ -18,6 +18,19 @@ from typing import Any, Dict, List, Optional, Tuple
 from shapely.geometry import LineString, Polygon, MultiPolygon
 from shapely.ops import unary_union
 
+CANONICAL_SCORE_PRECISION = 6
+ROAD_EFFICIENCY_RATIO_REF = 0.01
+DEV_AREA_RATIO_REF = 0.45
+COMPACTNESS_REF = 0.75
+IRREGULAR_COMPACTNESS_THRESHOLD = 0.55
+IRREGULAR_SHARE_REF = 0.35
+DEPTH_CV_REF = 0.30
+FRONTAGE_CV_REF = 0.30
+DEAD_END_RATIO_REF = 0.45
+DISCONNECTED_SEGMENT_RATIO_REF = 0.10
+LEFTOVER_RATIO_REF = 0.20
+PRACTICAL_LEFTOVER_AREA_RATIO = 0.35
+
 
 # ---------------------------------------------------------------------------
 # Road segment extraction
@@ -168,6 +181,88 @@ class LotPolygon:
     area_sqft:   float
 
 
+def _lot_sort_key(lot: LotPolygon) -> tuple:
+    min_x, min_y, max_x, max_y = lot.polygon.bounds
+    coords = tuple((round(float(x), 3), round(float(y), 3)) for x, y in lot.polygon.exterior.coords)
+    return (
+        round(float(min_x), 3),
+        round(float(min_y), 3),
+        round(float(max_x), 3),
+        round(float(max_y), 3),
+        round(float(lot.area_sqft), 3),
+        round(float(lot.frontage_ft), 3),
+        coords,
+    )
+
+
+def _clip01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _coefficient_of_variation(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    mean_value = sum(values) / len(values)
+    if abs(mean_value) <= 1e-6:
+        return 0.0
+    variance = sum((value - mean_value) ** 2 for value in values) / len(values)
+    return math.sqrt(max(variance, 0.0)) / mean_value
+
+
+def _topology_metrics(segments: List[RoadSegment]) -> tuple[float, float]:
+    if not segments:
+        return 1.0, 1.0
+    adjacency: dict[Tuple[float, float], set[Tuple[float, float]]] = {}
+    for seg in segments:
+        start = (round(seg.start[0], 3), round(seg.start[1], 3))
+        end = (round(seg.end[0], 3), round(seg.end[1], 3))
+        adjacency.setdefault(start, set()).add(end)
+        adjacency.setdefault(end, set()).add(start)
+    if not adjacency:
+        return 1.0, 1.0
+    dead_end_nodes = sum(1 for neighbors in adjacency.values() if len(neighbors) <= 1)
+    dead_end_ratio = dead_end_nodes / max(len(adjacency), 1)
+
+    nodes = list(adjacency.keys())
+    component_sizes: List[int] = []
+    visited: set[Tuple[float, float]] = set()
+    for node in nodes:
+        if node in visited:
+            continue
+        stack = [node]
+        size = 0
+        while stack:
+            current = stack.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            size += 1
+            stack.extend(sorted(adjacency[current] - visited))
+        component_sizes.append(size)
+    largest_component = max(component_sizes) if component_sizes else 0
+    disconnected_segment_ratio = 1.0 - (largest_component / max(len(adjacency), 1))
+    return dead_end_ratio, disconnected_segment_ratio
+
+
+def _awkward_leftover_ratio(
+    parcel_polygon: Polygon,
+    road_union: Polygon,
+    lots: List[LotPolygon],
+    min_area_sqft: float,
+) -> float:
+    lot_union = unary_union([lot.polygon for lot in lots]) if lots else Polygon()
+    try:
+        leftover = parcel_polygon.difference(road_union.union(lot_union))
+    except Exception:
+        return 1.0
+    if leftover.is_empty:
+        return 0.0
+    parts = [leftover] if leftover.geom_type == "Polygon" else list(leftover.geoms) if leftover.geom_type == "MultiPolygon" else []
+    awkward_threshold = max(250.0, min_area_sqft * PRACTICAL_LEFTOVER_AREA_RATIO)
+    awkward_area = sum(part.area for part in parts if part.area < awkward_threshold)
+    return awkward_area / max(parcel_polygon.area, 1.0)
+
+
 def _slice_strip(
     strip: BuildableStrip,
     min_frontage_ft: float = 50.0,
@@ -259,14 +354,23 @@ def _slice_all_strips(
     min_buildable_width_ft: float = 0.0,
     max_total_lots: Optional[int] = None,
 ) -> List[LotPolygon]:
+    effective_min_frontage_ft = min_frontage_ft
+    effective_max_frontage_ft = max_frontage_ft
+    if max_total_lots is not None and max_total_lots > 0:
+        total_frontage_ft = sum(max(0.0, strip.road_edge_length_ft) for strip in strips)
+        if total_frontage_ft > 0.0:
+            target_frontage_ft = total_frontage_ft / max_total_lots
+            effective_min_frontage_ft = max(min_frontage_ft, target_frontage_ft * 0.95)
+            effective_max_frontage_ft = max(max_frontage_ft, target_frontage_ft * 1.05)
+
     lots = []
     for strip in sorted(strips, key=lambda item: item.road_edge_length_ft, reverse=True):
         if max_total_lots is not None and len(lots) >= max_total_lots:
             break
         strip_lots = _slice_strip(
             strip,
-            min_frontage_ft=min_frontage_ft,
-            max_frontage_ft=max_frontage_ft,
+            min_frontage_ft=effective_min_frontage_ft,
+            max_frontage_ft=effective_max_frontage_ft,
             min_lot_area_sqft=min_lot_area_sqft,
             side_setback_ft=side_setback_ft,
             min_buildable_width_ft=min_buildable_width_ft,
@@ -291,7 +395,7 @@ def _deduplicate_lots(
         return []
 
     # Sort by area descending — prefer larger lots
-    sorted_lots = sorted(lots, key=lambda l: l.area_sqft, reverse=True)
+    sorted_lots = sorted(lots, key=lambda l: (-round(float(l.area_sqft), 3), _lot_sort_key(l)))
     accepted: List[LotPolygon] = []
     accepted_union = None
 
@@ -313,6 +417,7 @@ def _deduplicate_lots(
             except Exception:
                 pass
 
+    accepted.sort(key=_lot_sort_key)
     return accepted
 
 
@@ -386,6 +491,7 @@ def _validate_lots(
             continue
         valid.append(lot)
 
+    valid.sort(key=_lot_sort_key)
     return valid, ValidationSummary(
         total_before=total_before,
         total_after=len(valid),
@@ -502,25 +608,46 @@ def run_subdivision(
     parcel_area = parcel_polygon.area
     dev_ratio = total_lot_area / max(parcel_area, 1.0)
     avg_compactness = 0.0
+    compactness_values: List[float] = []
     if valid_lots:
-        compactness_values = []
         for lot in valid_lots:
             perimeter = lot.polygon.length
             compactness_values.append(4.0 * math.pi * lot.area_sqft / max(perimeter * perimeter, 1.0))
         avg_compactness = sum(compactness_values) / len(compactness_values)
     compliance_rate = len(valid_lots) / max(len(deduped), 1)
     road_density = total_road_len / max(parcel_area / 43560.0, 0.01)
+    frontage_values = [float(l.frontage_ft) for l in valid_lots]
+    depth_values = [float(l.depth_ft) for l in valid_lots]
+    irregular_lot_share = (
+        sum(1 for value in compactness_values if value < IRREGULAR_COMPACTNESS_THRESHOLD) / len(compactness_values)
+        if valid_lots
+        else 1.0
+    )
+    depth_cv = _coefficient_of_variation(depth_values)
+    frontage_cv = _coefficient_of_variation(frontage_values)
+    dead_end_ratio, disconnected_segment_ratio = _topology_metrics(segments)
+    awkward_leftover_ratio = _awkward_leftover_ratio(parcel_polygon, road_union, valid_lots, validation_min_area_sqft)
+    rejected_ratio = 1.0 - compliance_rate
 
     metrics = {
         "lot_count":         len(valid_lots),
+        "max_units":         int(max_total_lots or len(valid_lots)),
         "total_road_ft":     round(total_road_len, 1),
         "total_lot_area_sqft": round(total_lot_area, 1),
         "parcel_area_sqft":  round(parcel_area, 1),
         "dev_area_ratio":    round(dev_ratio, 4),
         "avg_lot_area_sqft": round(total_lot_area / len(valid_lots), 1),
         "avg_frontage_ft":   round(sum(l.frontage_ft for l in valid_lots) / len(valid_lots), 1),
+        "avg_depth_ft":      round(sum(l.depth_ft for l in valid_lots) / len(valid_lots), 1),
         "avg_lot_compactness": round(avg_compactness, 4),
+        "irregular_lot_share": round(irregular_lot_share, 4),
+        "lot_depth_cv": round(depth_cv, 4),
+        "lot_frontage_cv": round(frontage_cv, 4),
+        "dead_end_ratio": round(dead_end_ratio, 4),
+        "disconnected_segment_ratio": round(disconnected_segment_ratio, 4),
+        "awkward_leftover_ratio": round(awkward_leftover_ratio, 4),
         "compliance_rate":   round(compliance_rate, 4),
+        "rejected_ratio":    round(rejected_ratio, 4),
         "road_density_ft_per_acre": round(road_density, 1),
         "rejected_small": summary.rejected_small,
         "rejected_shape": summary.rejected_shape,
@@ -538,30 +665,26 @@ def run_subdivision(
 
 
 def score_subdivision(result: SubdivisionResult) -> float:
-    """
-    Compute a scalar score for a subdivision result.
-
-    Score = 0.6 * (lot_count / 40) + 0.4 * (dev_area_ratio / road_density_norm)
-    Clamped to [0, 1.5].
-    """
     lot_count = float(result.metrics.get("lot_count", 0))
-    road_ft = float(result.metrics.get("total_road_ft", 1.0))
+    max_units = float(result.metrics.get("max_units", lot_count or 1.0))
+    road_ft = float(result.metrics.get("total_road_ft", 0.0))
     dev_ratio = float(result.metrics.get("dev_area_ratio", 0.0))
-    avg_lot_area = float(result.metrics.get("avg_lot_area_sqft", 0.0))
     avg_compactness = float(result.metrics.get("avg_lot_compactness", 0.0))
     compliance_rate = float(result.metrics.get("compliance_rate", 0.0))
 
-    yield_score = min(1.0, lot_count / 32.0)
-    efficiency_score = min(1.0, dev_ratio / max(road_ft / 6000.0, 0.08))
-    regularity_score = min(1.0, (avg_compactness / 0.35))
-    compliance_score = min(1.0, compliance_rate)
-    area_score = min(1.0, avg_lot_area / 9000.0) if avg_lot_area > 0 else 0.0
+    hard_gate = 1.0 if lot_count > 0 and compliance_rate > 0.0 else 0.0
+    if hard_gate == 0.0:
+        return 0.0
 
-    score = (
-        0.34 * yield_score
-        + 0.22 * efficiency_score
-        + 0.18 * regularity_score
-        + 0.18 * compliance_score
-        + 0.08 * area_score
+    s_yield = round(_clip01(lot_count / max(max_units, 1.0)), CANONICAL_SCORE_PRECISION)
+    s_efficiency = round(_clip01((lot_count / max(road_ft, 1.0)) / ROAD_EFFICIENCY_RATIO_REF), CANONICAL_SCORE_PRECISION)
+    s_compliance = round(_clip01(compliance_rate), CANONICAL_SCORE_PRECISION)
+    s_coverage = round(_clip01(dev_ratio / DEV_AREA_RATIO_REF), CANONICAL_SCORE_PRECISION)
+    s_regularity = round(_clip01(avg_compactness / COMPACTNESS_REF), CANONICAL_SCORE_PRECISION)
+    s_secondary = round(
+        (0.50 * s_compliance) + (0.30 * s_coverage) + (0.20 * s_regularity),
+        CANONICAL_SCORE_PRECISION,
     )
-    return max(0.0, min(2.0, score))
+
+    score = (0.68 * s_yield) + (0.22 * s_efficiency) + (0.10 * s_secondary)
+    return round(hard_gate * _clip01(score), CANONICAL_SCORE_PRECISION)

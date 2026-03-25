@@ -1,7 +1,7 @@
 """
 Production Layout Search
 
-Main pipeline: parcel polygon → candidate road networks → guided/random selection
+Main pipeline: parcel polygon → candidate road networks → guided/deterministic selection
 → subdivision simulation → ranked results with GeoJSON output.
 
 No model_lab imports — self-contained production implementation.
@@ -20,6 +20,8 @@ from .graph_generator import RoadNetwork, generate_candidates, generate_candidat
 from .graph_prior_inference import GraphPriorInference, get_prior
 from .lot_subdivision import SubdivisionResult, run_subdivision, score_subdivision
 
+MAX_CANDIDATE_CAP = 48
+MAX_STAGNANT_EVALUATIONS = 24
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -230,6 +232,69 @@ def _candidate_satisfies_constraints(
             return False
     return True
 
+
+def _constraint_alignment_score(
+    result: SubdivisionResult,
+    *,
+    target_lot_depth_ft: float,
+    target_frontage_ft: float,
+    max_units: Optional[int],
+) -> float:
+    metrics = result.metrics
+    lot_count = float(metrics.get("lot_count", 0.0) or 0.0)
+    avg_frontage_ft = float(metrics.get("avg_frontage_ft", 0.0) or 0.0)
+    avg_depth_ft = float(metrics.get("avg_depth_ft", 0.0) or 0.0)
+    compliance_rate = float(metrics.get("compliance_rate", 0.0) or 0.0)
+
+    density_alignment = 0.0
+    if max_units is not None and max_units > 0:
+        density_alignment = max(0.0, 1.0 - (abs(lot_count - max_units) / max(float(max_units), 1.0)))
+
+    frontage_alignment = 0.0
+    if target_frontage_ft > 0.0 and avg_frontage_ft > 0.0:
+        frontage_alignment = max(
+            0.0,
+            1.0 - (abs(avg_frontage_ft - target_frontage_ft) / max(target_frontage_ft, 1.0)),
+        )
+
+    depth_alignment = 0.0
+    if target_lot_depth_ft > 0.0 and avg_depth_ft > 0.0:
+        depth_alignment = max(
+            0.0,
+            1.0 - (abs(avg_depth_ft - target_lot_depth_ft) / max(target_lot_depth_ft, 1.0)),
+        )
+
+    return (
+        0.24 * density_alignment
+        + 0.16 * frontage_alignment
+        + 0.16 * depth_alignment
+        + 0.04 * min(1.0, compliance_rate)
+    )
+
+
+def _network_sort_key(network: RoadNetwork) -> tuple:
+    line_keys = []
+    for line in network.centerlines:
+        coords = tuple((round(float(x), 3), round(float(y), 3)) for x, y in line.coords)
+        line_keys.append(coords)
+    return (
+        str(network.generator_type),
+        len(network.centerlines),
+        round(sum(line.length for line in network.centerlines), 3),
+        tuple(sorted(line_keys)),
+    )
+
+
+def _evaluated_candidate_sort_key(item: Tuple[float, RoadNetwork, SubdivisionResult]) -> tuple:
+    score, network, result = item
+    metrics = result.metrics
+    return (
+        -round(float(score), 8),
+        -int(metrics.get("lot_count", 0) or 0),
+        round(float(metrics.get("total_road_ft", 0.0) or 0.0), 3),
+        _network_sort_key(network),
+    )
+
 def run_layout_search(
     parcel_polygon:   Polygon,
     area_sqft:        float,
@@ -266,7 +331,7 @@ def run_layout_search(
         to_lnglat:       Coordinate conversion fn (x_ft, y_ft) -> [lng, lat]
         n_candidates:    Number of networks to simulate
         n_top:           Number of top results to return
-        seed:            Random seed for reproducibility
+        seed:            Deterministic variant offset for reproducibility
         road_width_ft:   Total road width
         lot_depth:       Target lot depth in feet
         min_frontage_ft: Minimum lot frontage in feet
@@ -276,6 +341,7 @@ def run_layout_search(
         List of up to n_top LayoutCandidate objects, ranked by score descending.
     """
     started = time.perf_counter()
+    n_candidates = max(1, min(int(n_candidates), MAX_CANDIDATE_CAP))
     parcel_polygon = _prepare_parcel_polygon(parcel_polygon)
     area_sqft = float(area_sqft or parcel_polygon.area)
     prior: Optional[GraphPriorInference] = get_prior() if use_prior else None
@@ -319,6 +385,8 @@ def run_layout_search(
     ]
 
     evaluated: List[Tuple[float, RoadNetwork, SubdivisionResult]] = []
+    best_score: float | None = None
+    stagnant_evaluations = 0
     parcel_variants = _parcel_variants(parcel_polygon)
     for variant_index, parcel_variant in enumerate(parcel_variants):
         if (time.perf_counter() - started) > max_runtime_seconds:
@@ -333,7 +401,12 @@ def run_layout_search(
                     n=pool_size,
                     seed=seed + variant_index,
                     strategies=strategies,
+                    design_targets={
+                        "lot_depth_ft": lot_depth,
+                        "min_frontage_ft": min_frontage_ft,
+                    },
                 )
+                pool = sorted(pool, key=_network_sort_key)
                 scored = prior.rank_networks(pool, parcel_variant, area_sqft)
                 selected = [item.network for item in scored[:n_candidates]]
             else:
@@ -343,6 +416,10 @@ def run_layout_search(
                     n=n_candidates,
                     seed=seed + variant_index,
                     strategies=strategies,
+                    design_targets={
+                        "lot_depth_ft": lot_depth,
+                        "min_frontage_ft": min_frontage_ft,
+                    },
                 )
         except Exception:
             selected = []
@@ -354,16 +431,20 @@ def run_layout_search(
                     n=max(8, n_candidates),
                     seed=seed + 101 + variant_index,
                     strategies=strategies,
+                    design_targets={
+                        "lot_depth_ft": lot_depth,
+                        "min_frontage_ft": min_frontage_ft,
+                    },
                 )
             except Exception:
                 selected = []
         if not selected:
             continue
+        selected = sorted(selected, key=_network_sort_key)
 
         for params in simulation_attempts:
             if (time.perf_counter() - started) > max_runtime_seconds:
                 break
-            evaluated.clear()
             for network in selected:
                 if (time.perf_counter() - started) > max_runtime_seconds:
                     break
@@ -394,13 +475,26 @@ def run_layout_search(
                 ):
                     continue
                 try:
-                    score = score_subdivision(result)
+                    score = score_subdivision(result) + _constraint_alignment_score(
+                        result,
+                        target_lot_depth_ft=params["lot_depth"],
+                        target_frontage_ft=params["min_frontage_ft"],
+                        max_units=max_units,
+                    )
                 except Exception:
                     continue
                 evaluated.append((score, network, result))
-            if evaluated:
+                canonical_score = round(float(score), 8)
+                if best_score is None or canonical_score > best_score + 1e-8:
+                    best_score = canonical_score
+                    stagnant_evaluations = 0
+                else:
+                    stagnant_evaluations += 1
+                if stagnant_evaluations >= MAX_STAGNANT_EVALUATIONS:
+                    break
+            if stagnant_evaluations >= MAX_STAGNANT_EVALUATIONS:
                 break
-        if evaluated:
+        if stagnant_evaluations >= MAX_STAGNANT_EVALUATIONS:
             break
 
     if not evaluated:
@@ -409,7 +503,7 @@ def run_layout_search(
     # -------------------------------------------------------------------
     # Rank and return top results
     # -------------------------------------------------------------------
-    evaluated.sort(key=lambda x: x[0], reverse=True)
+    evaluated.sort(key=_evaluated_candidate_sort_key)
     top = evaluated[:n_top]
 
     candidates = []

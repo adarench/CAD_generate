@@ -6,7 +6,13 @@ import { useQuery } from "@tanstack/react-query";
 
 import { PlanSvgCanvas } from "@/components/studio/PlanSvgCanvas";
 import { fetchBedrockParcel, fetchRun } from "@/lib/api";
-import { layoutVisualizationFromPipelineRun, studioParcelFromBedrock } from "@/lib/parcels";
+import {
+  layoutVisualizationFromPipelineRun,
+  pipelineRunExplanation,
+  pipelineRunStateLabel,
+  pipelineRunUiState,
+  studioParcelFromBedrock,
+} from "@/lib/parcels";
 
 interface RunProps {
   params: { runId: string };
@@ -31,6 +37,8 @@ export default function RunPage({ params }: RunProps) {
   const run = runQuery.data ?? null;
   const parcel = parcelQuery.data ?? null;
   const studioParcel = parcel ? studioParcelFromBedrock(parcel) : null;
+  const runState = pipelineRunUiState(run);
+  const explanation = pipelineRunExplanation(run);
   const visualization = useMemo(
     () => (run ? layoutVisualizationFromPipelineRun(run, parcel) : null),
     [parcel, run]
@@ -45,9 +53,10 @@ export default function RunPage({ params }: RunProps) {
             <p>Parcel ID: {run?.parcel_id ?? "Loading..."}</p>
             <p>Jurisdiction: {parcel?.jurisdiction ?? "—"}</p>
             <p>APN: {studioParcel?.apn ?? "—"}</p>
-            <p>Status: {run?.feasibility_result.status ?? "—"}</p>
+            <p>Status: {pipelineRunStateLabel(run)}</p>
             <p>Saved: {run ? formatTimestamp(run.timestamp) : "—"}</p>
           </div>
+          {run ? <div className="mt-4"><RunStateBadge status={run.status} /></div> : null}
           {run?.parcel_id ? (
             <Link
               href={`/studio/${run.parcel_id}`}
@@ -115,8 +124,20 @@ export default function RunPage({ params }: RunProps) {
       </section>
 
       <aside className="overflow-y-auto bg-slate-950/85 p-5">
-        <Panel title="Feasibility summary">
+        <Panel title="Decision summary">
           {run ? (
+            <div className="space-y-3 text-sm text-slate-300">
+              <p>{explanation}</p>
+              <p>District: {run.zoning_result.district}</p>
+              {run.bypass_reason ? <p>Reason: {run.bypass_reason.replace(/_/g, " ")}</p> : null}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">Loading run...</p>
+          )}
+        </Panel>
+
+        <Panel title="Feasibility summary">
+          {run?.feasibility_result ? (
             <div className="space-y-2 text-sm text-slate-300">
               <p>Units: {run.feasibility_result.units}</p>
               <p>Projected revenue: {formatCurrency(run.feasibility_result.projected_revenue)}</p>
@@ -126,19 +147,27 @@ export default function RunPage({ params }: RunProps) {
               <p>Risk score: {formatNumber(run.feasibility_result.risk_score)}</p>
               <p>Confidence: {formatPercent(run.feasibility_result.confidence)}</p>
             </div>
+          ) : run ? (
+            <p className="text-sm text-slate-500">
+              Feasibility metrics are only available for buildable parcels that complete the full pipeline.
+            </p>
           ) : (
             <p className="text-sm text-slate-500">Loading run...</p>
           )}
         </Panel>
 
         <Panel title="Layout summary">
-          {visualization ? (
+          {visualization && runState === "buildable" ? (
             <div className="space-y-2 text-sm text-slate-300">
               <p>Layout ID: {visualization.layoutId}</p>
               <p>Lot count: {visualization.lotCount}</p>
               <p>Road length: {Math.round(visualization.roadLengthFt).toLocaleString()} ft</p>
               <p>Average lot size: {visualization.averageLotAreaSqft?.toLocaleString() ?? "—"} sqft</p>
             </div>
+          ) : run ? (
+            <p className="text-sm text-slate-500">
+              Layout geometry is only available for buildable parcels.
+            </p>
           ) : (
             <p className="text-sm text-slate-500">Layout geometry unavailable.</p>
           )}
@@ -161,6 +190,17 @@ export default function RunPage({ params }: RunProps) {
       </aside>
     </div>
   );
+}
+
+function RunStateBadge({ status }: { status: "completed" | "non_buildable" | "unsupported" }) {
+  const tone =
+    status === "completed"
+      ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+      : status === "non_buildable"
+        ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+        : "border-rose-400/40 bg-rose-400/10 text-rose-300";
+  const label = status === "completed" ? "Buildable" : status === "non_buildable" ? "Non-buildable" : "Unsupported";
+  return <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${tone}`}>{label}</span>;
 }
 
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {

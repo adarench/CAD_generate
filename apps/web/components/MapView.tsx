@@ -304,8 +304,8 @@ function BasemapTileLayers({
         key={`${basemapMode}-base`}
         attribution={config.attribution}
         opacity={config.opacity ?? 1}
-        subdomains={config.subdomains}
         url={config.url}
+        {...(config.subdomains ? { subdomains: config.subdomains } : {})}
         eventHandlers={{
           load: () => {
             if (readyNotifiedRef.current) return;

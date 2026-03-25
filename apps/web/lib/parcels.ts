@@ -118,14 +118,17 @@ export type PipelineRun = {
   schema_name: "PipelineRun";
   schema_version: string;
   run_id: string;
+  status: "completed" | "non_buildable" | "unsupported";
   parcel_id: string;
   zoning_result: BedrockZoningRules;
-  layout_result: BedrockLayoutResult;
-  feasibility_result: BedrockFeasibilityResult;
+  layout_result?: BedrockLayoutResult | null;
+  feasibility_result?: BedrockFeasibilityResult | null;
   timestamp: string;
   git_commit?: string | null;
   input_hash?: string | null;
   stage_runtimes?: Record<string, number>;
+  zoning_bypassed?: boolean;
+  bypass_reason?: string | null;
 };
 
 export type PipelineRunSummary = {
@@ -182,12 +185,14 @@ export type ParcelRecord = DiscoveryParcelRecord;
 export type RunSummary = PipelineRunSummary;
 export type RunDetail = PipelineRun;
 export type OptimizationResponse = LayoutVisualizationResult;
+export type PipelineRunUiState = "buildable" | "non_buildable" | "unsupported";
 
 export function parcelLoadRequestFromDiscovery(parcel: DiscoveryParcelRecord) {
   return {
     parcel_id: parcel.id,
     geometry: parcel.geometryGeoJSON,
     jurisdiction: inferJurisdictionFromDiscovery(parcel),
+    zoning_district: parcel.zoningCode,
   };
 }
 
@@ -208,24 +213,67 @@ export function studioParcelFromBedrock(parcel: BedrockParcel): StudioParcelReco
 export function layoutVisualizationFromPipelineRun(
   run: PipelineRun,
   parcel?: BedrockParcel | null
+): LayoutVisualizationResult | null {
+  if (!run.layout_result) {
+    return null;
+  }
+  return layoutVisualizationFromLayoutResult(run.layout_result, parcel, run.run_id, run.zoning_result);
+}
+
+export function layoutVisualizationFromLayoutResult(
+  layout: BedrockLayoutResult,
+  parcel?: BedrockParcel | null,
+  runId = "design-mode",
+  zoning?: BedrockZoningRules | null
 ): LayoutVisualizationResult {
   const parcelAreaSqft = parcel?.area_sqft ?? null;
-  const lotCount = run.layout_result.unit_count;
+  const lotCount = layout.unit_count;
   const averageLotAreaSqft =
     parcelAreaSqft && lotCount > 0 ? Math.round(parcelAreaSqft / lotCount) : null;
 
   return {
-    runId: run.run_id,
-    layoutId: run.layout_result.layout_id,
+    runId,
+    layoutId: layout.layout_id,
     lotCount,
-    roadLengthFt: run.layout_result.road_length_ft,
+    roadLengthFt: layout.road_length_ft,
     parcelAreaSqft,
     averageLotAreaSqft,
-    resultGeoJSON: layoutResultToFeatureCollection(run.layout_result),
+    resultGeoJSON: layoutResultToFeatureCollection(layout, parcel, zoning),
   };
 }
 
-export function layoutResultToFeatureCollection(layout: BedrockLayoutResult): GeoJSON.FeatureCollection {
+export function pipelineRunUiState(run: PipelineRun | null | undefined): PipelineRunUiState | null {
+  if (!run) return null;
+  if (run.status === "completed") return "buildable";
+  if (run.status === "non_buildable") return "non_buildable";
+  return "unsupported";
+}
+
+export function pipelineRunStateLabel(run: PipelineRun | null | undefined): string {
+  const state = pipelineRunUiState(run);
+  if (state === "buildable") return "Buildable";
+  if (state === "non_buildable") return "Non-buildable";
+  if (state === "unsupported") return "Unsupported";
+  return "Not run";
+}
+
+export function pipelineRunExplanation(run: PipelineRun | null | undefined): string | null {
+  if (!run) return null;
+  if (run.status === "completed") {
+    return "The parcel produced a complete layout and feasibility result.";
+  }
+  if (run.status === "non_buildable") {
+    const reason = run.bypass_reason ? run.bypass_reason.replace(/_/g, " ") : "non-buildable zoning constraints";
+    return `${run.zoning_result.district} is currently treated as non-buildable because of ${reason}.`;
+  }
+  return `${run.zoning_result.district} is not yet supported by the current pipeline capabilities.`;
+}
+
+export function layoutResultToFeatureCollection(
+  layout: BedrockLayoutResult,
+  parcel?: BedrockParcel | null,
+  zoning?: BedrockZoningRules | null
+): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
 
   for (const [index, geometry] of layout.lot_geometries.entries()) {
@@ -255,7 +303,8 @@ export function layoutResultToFeatureCollection(layout: BedrockLayoutResult): Ge
     }
   }
 
-  for (const [index, geometry] of layout.road_geometries.entries()) {
+  const roadGeometries = parcel ? roadFootprintGeometries(layout.road_geometries, parcel, zoning) : layout.road_geometries;
+  for (const [index, geometry] of roadGeometries.entries()) {
     features.push({
       type: "Feature",
       geometry,
@@ -270,6 +319,123 @@ export function layoutResultToFeatureCollection(layout: BedrockLayoutResult): Ge
     type: "FeatureCollection",
     features,
   };
+}
+
+const FEET_PER_DEGREE_LAT = 364000;
+const DEFAULT_ROAD_WIDTH_FT = 32;
+
+function roadFootprintGeometries(
+  geometries: BedrockLayoutGeometry[],
+  parcel: BedrockParcel,
+  zoning?: BedrockZoningRules | null
+): BedrockLayoutGeometry[] {
+  const roadWidthFt = zoning?.road_right_of_way_ft ?? DEFAULT_ROAD_WIDTH_FT;
+  const projection = projectionFromParcel(parcel);
+  const polygons: GeoJSON.Polygon[] = [];
+
+  for (const geometry of geometries) {
+    if (geometry.type === "Polygon" || geometry.type === "MultiPolygon") {
+      polygons.push(...flattenPolygonGeometry(geometry));
+      continue;
+    }
+    if (geometry.type === "LineString") {
+      polygons.push(...bufferLineStringGeometry(geometry.coordinates, projection, roadWidthFt));
+      continue;
+    }
+    for (const line of geometry.coordinates) {
+      polygons.push(...bufferLineStringGeometry(line, projection, roadWidthFt));
+    }
+  }
+
+  return polygons;
+}
+
+function projectionFromParcel(parcel: BedrockParcel) {
+  const [lng, lat] = parcel.centroid ?? centroidFromGeometry(parcel.geometry);
+  const feetPerDegreeLng = FEET_PER_DEGREE_LAT * Math.cos((lat * Math.PI) / 180);
+  return {
+    originLng: lng,
+    originLat: lat,
+    feetPerDegreeLng: Math.max(feetPerDegreeLng, 1),
+    feetPerDegreeLat: FEET_PER_DEGREE_LAT,
+  };
+}
+
+function bufferLineStringGeometry(
+  points: number[][],
+  projection: {
+    originLng: number;
+    originLat: number;
+    feetPerDegreeLng: number;
+    feetPerDegreeLat: number;
+  },
+  roadWidthFt: number
+): GeoJSON.Polygon[] {
+  if (points.length < 2 || roadWidthFt <= 0) return [];
+  const polygons: GeoJSON.Polygon[] = [];
+  const halfWidthFt = roadWidthFt / 2;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = toLocalPoint(points[index], projection);
+    const end = toLocalPoint(points[index + 1], projection);
+    const dx = end[0] - start[0];
+    const dy = end[1] - start[1];
+    const length = Math.hypot(dx, dy);
+    if (length <= 0) continue;
+    const offsetX = (-dy / length) * halfWidthFt;
+    const offsetY = (dx / length) * halfWidthFt;
+    const ring = [
+      toLngLatPoint([start[0] + offsetX, start[1] + offsetY], projection),
+      toLngLatPoint([end[0] + offsetX, end[1] + offsetY], projection),
+      toLngLatPoint([end[0] - offsetX, end[1] - offsetY], projection),
+      toLngLatPoint([start[0] - offsetX, start[1] - offsetY], projection),
+      toLngLatPoint([start[0] + offsetX, start[1] + offsetY], projection),
+    ];
+    polygons.push({
+      type: "Polygon",
+      coordinates: [ring],
+    });
+  }
+
+  return polygons;
+}
+
+function flattenPolygonGeometry(geometry: Extract<BedrockLayoutGeometry, GeoJSON.Polygon | GeoJSON.MultiPolygon>): GeoJSON.Polygon[] {
+  if (geometry.type === "Polygon") return [geometry];
+  return geometry.coordinates.map((polygon) => ({
+    type: "Polygon",
+    coordinates: polygon,
+  }));
+}
+
+function toLocalPoint(
+  point: number[],
+  projection: {
+    originLng: number;
+    originLat: number;
+    feetPerDegreeLng: number;
+    feetPerDegreeLat: number;
+  }
+): [number, number] {
+  return [
+    (point[0] - projection.originLng) * projection.feetPerDegreeLng,
+    (point[1] - projection.originLat) * projection.feetPerDegreeLat,
+  ];
+}
+
+function toLngLatPoint(
+  point: [number, number],
+  projection: {
+    originLng: number;
+    originLat: number;
+    feetPerDegreeLng: number;
+    feetPerDegreeLat: number;
+  }
+): [number, number] {
+  return [
+    projection.originLng + point[0] / projection.feetPerDegreeLng,
+    projection.originLat + point[1] / projection.feetPerDegreeLat,
+  ];
 }
 
 function extractParcelApn(parcel: BedrockParcel): string | null {

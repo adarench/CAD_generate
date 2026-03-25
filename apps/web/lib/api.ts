@@ -1,5 +1,7 @@
 import type {
+  BedrockLayoutResult,
   BedrockParcel,
+  BedrockZoningRules,
   DiscoveryParcelRecord,
   ParcelLookupResponse,
   PipelineRun,
@@ -128,6 +130,7 @@ export async function loadBedrockParcel(input: {
   parcel_id?: string;
   geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon;
   jurisdiction?: string;
+  zoning_district?: string | null;
 }) {
   return parseResponse<BedrockParcel>(
     await fetch(`/api/bedrock/parcel/load`, {
@@ -159,6 +162,63 @@ export async function runBedrockPipeline(parcel: BedrockParcel) {
       body: JSON.stringify({ parcel }),
     })
   );
+}
+
+export async function runBedrockLayoutSearch(input: {
+  parcel: BedrockParcel;
+  zoning: BedrockZoningRules;
+  max_candidates?: number;
+}) {
+  return parseResponse<BedrockLayoutResult>(
+    await fetch(`/api/bedrock/layout/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        parcel: input.parcel,
+        zoning: input.zoning,
+        max_candidates: input.max_candidates ?? 50,
+      }),
+    })
+  );
+}
+
+export async function exportBedrockLayout(input: {
+  parcel: BedrockParcel;
+  layout: BedrockLayoutResult;
+  zoning?: BedrockZoningRules | null;
+  format?: "dxf" | "step" | "geojson";
+}) {
+  const response = await fetch(`/api/bedrock/layout/export`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      parcel: input.parcel,
+      layout: input.layout,
+      zoning: input.zoning ?? undefined,
+      format: input.format ?? "dxf",
+    }),
+  });
+  if (!response.ok) {
+    let payload: unknown = null;
+    let detail = "Export failed.";
+    try {
+      payload = await response.json();
+      detail = extractErrorMessage(payload) ?? detail;
+    } catch {
+      try {
+        detail = await response.text();
+      } catch {
+        detail = "Export failed.";
+      }
+    }
+    throw new ApiError(detail, response.status, payload);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const filenameMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const filename = filenameMatch?.[1] ?? `layout-export.${input.format ?? "dxf"}`;
+  return { blob, filename };
 }
 
 export async function fetchRuns(params?: {

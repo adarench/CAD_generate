@@ -14,7 +14,6 @@ No model_lab imports — self-contained production implementation.
 from __future__ import annotations
 
 import math
-import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -111,6 +110,79 @@ def _candidate_is_viable(network: RoadNetwork, poly: Polygon, profile: dict) -> 
     return True
 
 
+def _design_targets(design_targets: Optional[Dict[str, float]]) -> Dict[str, float]:
+    payload = design_targets or {}
+    lot_depth_ft = float(payload.get("lot_depth_ft", 110.0) or 110.0)
+    min_frontage_ft = float(payload.get("min_frontage_ft", 50.0) or 50.0)
+    return {
+        "lot_depth_ft": max(70.0, min(160.0, lot_depth_ft)),
+        "min_frontage_ft": max(35.0, min(95.0, min_frontage_ft)),
+    }
+
+
+def _variant_pick(options: List, variant_index: int, salt: int = 0):
+    if not options:
+        raise ValueError("deterministic variant selection requires a non-empty option list")
+    return options[(variant_index + salt) % len(options)]
+
+
+def _strategy_kwargs(strategy: str, profile: dict, design_targets: Optional[Dict[str, float]]) -> dict:
+    targets = _design_targets(design_targets)
+    lot_depth_ft = targets["lot_depth_ft"]
+    min_frontage_ft = targets["min_frontage_ft"]
+    min_dim = max(profile["min_dim"], 1.0)
+
+    offset_ft = max(28.0, min(min_dim * 0.14, min_frontage_ft * 0.65))
+    branch_block_span_ft = max(
+        120.0,
+        min(
+            profile["max_dim"] * 0.70,
+            (lot_depth_ft * 1.25) + (min_frontage_ft * 1.10),
+        ),
+    )
+    branch_spacing_ft = max(75.0, min(profile["max_dim"] * 0.48, branch_block_span_ft))
+    branch_depth_fraction = max(0.45, min(0.9, (lot_depth_ft / min_dim) * 1.35))
+
+    if strategy == "spine":
+        return {
+            "offset_ft": offset_ft,
+            "branch_block_span_ft": branch_block_span_ft,
+            "branch_depth_fraction": branch_depth_fraction,
+        }
+    if strategy == "grid":
+        return {
+            "offset_ft": offset_ft,
+            "n_x": max(2, min(6, int(round(profile["width"] / max(min_frontage_ft * 2.4, 110.0))))),
+            "n_y": max(2, min(6, int(round(profile["height"] / max(lot_depth_ft * 1.5, 150.0))))),
+        }
+    if strategy == "cul_de_sac":
+        culdesac_branch_count = max(
+            1,
+            min(
+                3,
+                int(
+                    math.ceil(
+                        max(profile["max_dim"] * 0.55, 1.0)
+                        / max(branch_block_span_ft, 1.0)
+                    )
+                ),
+            ),
+        )
+        return {
+            "stem_offset_ft": offset_ft,
+            "bulb_radius_ft": max(24.0, min(min_dim * 0.16, min_frontage_ft * 0.78, lot_depth_ft * 0.55)),
+            "add_branch": True,
+            "branch_distance_ft": max(70.0, min(lot_depth_ft * 1.12, branch_block_span_ft * 0.92)),
+            "branch_length_ft": max(min_frontage_ft * 1.8, min_dim * 0.22),
+            "branch_count": culdesac_branch_count,
+        }
+    if strategy == "herringbone":
+        return {
+            "spacing_ft": branch_spacing_ft,
+        }
+    return {}
+
+
 def _weighted_types(profile: dict) -> Tuple[List[str], List[float]]:
     types = list(_GENERATORS.keys())
     base_weights = dict(zip(types, _TYPE_WEIGHTS))
@@ -137,12 +209,12 @@ def _weighted_types(profile: dict) -> Tuple[List[str], List[float]]:
 # 1. Spine (fishbone)
 # ---------------------------------------------------------------------------
 
-def _gen_spine(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
+def _gen_spine(poly: Polygon, variant_index: int = 0, **kw) -> RoadNetwork:
     minx, miny, maxx, maxy = _bbox(poly)
     w, h = maxx - minx, maxy - miny
     offset = kw.get("offset_ft", 40.0)
-    spacing = kw.get("branch_spacing_ft", max(100.0, min(w, h) / 4))
-    entry_side = kw.get("entry_side", rng.choice(["south", "north", "east", "west"]))
+    block_span_ft = kw.get("branch_block_span_ft", max(100.0, min(w, h) / 4))
+    entry_side = kw.get("entry_side", _variant_pick(["south", "north", "east", "west"], variant_index))
 
     lines = []
     if entry_side in ("south", "north"):
@@ -153,8 +225,7 @@ def _gen_spine(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
             y0, y1 = miny + h * 0.1, maxy - h * 0.1
         spine = LineString([(cx, y0), (cx, y1)])
         lines.append(spine)
-        n = max(2, int((y1 - y0) / spacing))
-        blen = (w / 2 - offset) * kw.get("branch_depth_fraction", 0.8)
+        n = max(2, min(6, int(math.ceil((y1 - y0) / max(block_span_ft, 1.0)))))
         for i in range(1, n + 1):
             y = y0 + i * (y1 - y0) / (n + 1)
             lines.append(LineString([(minx + offset, y), (cx - 5, y)]))
@@ -166,8 +237,7 @@ def _gen_spine(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
         if x1 <= x0:
             x0, x1 = minx + w * 0.1, maxx - w * 0.1
         lines.append(LineString([(x0, cy), (x1, cy)]))
-        n = max(2, int((x1 - x0) / spacing))
-        blen = (h / 2 - offset) * 0.8
+        n = max(2, min(6, int(math.ceil((x1 - x0) / max(block_span_ft, 1.0)))))
         for i in range(1, n + 1):
             x = x0 + i * (x1 - x0) / (n + 1)
             lines.append(LineString([(x, miny + offset), (x, cy - 5)]))
@@ -184,11 +254,11 @@ def _gen_spine(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
 # 2. Loop
 # ---------------------------------------------------------------------------
 
-def _gen_loop(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
+def _gen_loop(poly: Polygon, variant_index: int = 0, **kw) -> RoadNetwork:
     minx, miny, maxx, maxy = _bbox(poly)
     w, h = maxx - minx, maxy - miny
     offset = kw.get("offset_ft", min(w, h) * 0.12)
-    add_cross = kw.get("add_cross", rng.random() < 0.4)
+    add_cross = kw.get("add_cross", (variant_index % 2) == 0)
 
     lx0, ly0 = minx + offset, miny + offset
     lx1, ly1 = maxx - offset, maxy - offset
@@ -224,7 +294,7 @@ def _gen_loop(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
 # 3. Grid (novel — not in production templates)
 # ---------------------------------------------------------------------------
 
-def _gen_grid(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
+def _gen_grid(poly: Polygon, variant_index: int = 0, **kw) -> RoadNetwork:
     minx, miny, maxx, maxy = _bbox(poly)
     w, h = maxx - minx, maxy - miny
     offset = kw.get("offset_ft", 40.0)
@@ -262,10 +332,10 @@ def _gen_grid(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
 # 4. Herringbone (novel)
 # ---------------------------------------------------------------------------
 
-def _gen_herringbone(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
+def _gen_herringbone(poly: Polygon, variant_index: int = 0, **kw) -> RoadNetwork:
     minx, miny, maxx, maxy = _bbox(poly)
     w, h = maxx - minx, maxy - miny
-    angle_deg = kw.get("angle_deg", rng.uniform(30.0, 60.0))
+    angle_deg = kw.get("angle_deg", _variant_pick([30.0, 37.5, 45.0, 52.5, 60.0], variant_index))
     spacing = kw.get("spacing_ft", max(100.0, min(w, h) / 4))
     offset = min(w, h) * 0.08
     rad = math.radians(angle_deg)
@@ -300,11 +370,11 @@ def _gen_herringbone(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
 # 5. Radial (novel)
 # ---------------------------------------------------------------------------
 
-def _gen_radial(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
+def _gen_radial(poly: Polygon, variant_index: int = 0, **kw) -> RoadNetwork:
     minx, miny, maxx, maxy = _bbox(poly)
     w, h = maxx - minx, maxy - miny
-    n_spokes = kw.get("n_spokes", rng.randint(4, 8))
-    n_rings = kw.get("n_rings", rng.randint(1, 2))
+    n_spokes = kw.get("n_spokes", _variant_pick([4, 5, 6, 7, 8], variant_index))
+    n_rings = kw.get("n_rings", _variant_pick([1, 2], variant_index, salt=3))
     hub_x = kw.get("hub_x", (minx + maxx) / 2.0)
     hub_y = kw.get("hub_y", (miny + maxy) / 2.0)
     max_r = min(w, h) / 2.0 * 0.85
@@ -313,7 +383,7 @@ def _gen_radial(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
     angle_step = 2 * math.pi / n_spokes
 
     for k in range(n_spokes):
-        angle = k * angle_step + kw.get("rotation_rad", 0.0)
+        angle = k * angle_step + kw.get("rotation_rad", _variant_pick([0.0, math.pi / 8.0, math.pi / 4.0], variant_index, salt=5))
         dx, dy = math.cos(angle), math.sin(angle)
         lines.append(LineString([(hub_x, hub_y), (hub_x + dx * max_r, hub_y + dy * max_r)]))
 
@@ -343,7 +413,7 @@ def _gen_radial(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
 # 6. T-junction
 # ---------------------------------------------------------------------------
 
-def _gen_t_junction(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
+def _gen_t_junction(poly: Polygon, variant_index: int = 0, **kw) -> RoadNetwork:
     minx, miny, maxx, maxy = _bbox(poly)
     w, h = maxx - minx, maxy - miny
     offset = kw.get("offset_ft", 40.0)
@@ -368,12 +438,16 @@ def _gen_t_junction(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
 # 7. Cul-de-sac (production strategy)
 # ---------------------------------------------------------------------------
 
-def _gen_cul_de_sac(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
+def _gen_cul_de_sac(poly: Polygon, variant_index: int = 0, **kw) -> RoadNetwork:
     minx, miny, maxx, maxy = _bbox(poly)
     w, h = maxx - minx, maxy - miny
     vertical = h >= w
     stem_offset = kw.get("stem_offset_ft", max(28.0, min(w, h) * 0.08))
     bulb_radius = kw.get("bulb_radius_ft", max(28.0, min(w, h) * 0.12))
+    add_branch = bool(kw.get("add_branch", False))
+    branch_distance_ft = float(kw.get("branch_distance_ft", max(70.0, min(w, h) * 0.28)))
+    branch_length_ft = float(kw.get("branch_length_ft", max(70.0, min(w, h) * 0.24)))
+    branch_count = max(1, int(kw.get("branch_count", 1)))
 
     lines: List[LineString] = []
     if vertical:
@@ -382,6 +456,15 @@ def _gen_cul_de_sac(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
         stem_y1 = min(maxy - stem_offset, stem_y0 + max(120.0, h * 0.55))
         lines.append(LineString([(cx, miny), (cx, stem_y0)]))
         lines.append(LineString([(cx, stem_y0), (cx, stem_y1)]))
+        if add_branch:
+            branch_half = min(branch_length_ft / 2.0, max((w / 2.0) - stem_offset, 20.0))
+            for branch_index in range(branch_count):
+                branch_y = min(
+                    stem_y0 + branch_distance_ft * (branch_index + 1),
+                    stem_y1 - bulb_radius * 0.9,
+                )
+                if branch_y > stem_y0 + 15.0 and branch_half > 20.0:
+                    lines.append(LineString([(cx - branch_half, branch_y), (cx + branch_half, branch_y)]))
         cy = min(stem_y1 + bulb_radius * 0.6, maxy - stem_offset)
         circle_pts = [
             (cx + bulb_radius * math.cos(theta), cy + bulb_radius * math.sin(theta))
@@ -394,6 +477,15 @@ def _gen_cul_de_sac(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
         stem_x1 = min(maxx - stem_offset, stem_x0 + max(120.0, w * 0.55))
         lines.append(LineString([(minx, cy), (stem_x0, cy)]))
         lines.append(LineString([(stem_x0, cy), (stem_x1, cy)]))
+        if add_branch:
+            branch_half = min(branch_length_ft / 2.0, max((h / 2.0) - stem_offset, 20.0))
+            for branch_index in range(branch_count):
+                branch_x = min(
+                    stem_x0 + branch_distance_ft * (branch_index + 1),
+                    stem_x1 - bulb_radius * 0.9,
+                )
+                if branch_x > stem_x0 + 15.0 and branch_half > 20.0:
+                    lines.append(LineString([(branch_x, cy - branch_half), (branch_x, cy + branch_half)]))
         cx = min(stem_x1 + bulb_radius * 0.6, maxx - stem_offset)
         circle_pts = [
             (cx + bulb_radius * math.cos(theta), cy + bulb_radius * math.sin(theta))
@@ -404,7 +496,7 @@ def _gen_cul_de_sac(poly: Polygon, rng: random.Random, **kw) -> RoadNetwork:
     return RoadNetwork(
         centerlines=_clamp(lines, poly),
         generator_type="cul_de_sac",
-        params={"bulb_radius_ft": bulb_radius, "stem_offset_ft": stem_offset},
+        params={"bulb_radius_ft": bulb_radius, "stem_offset_ft": stem_offset, "branch_count": branch_count},
     )
 
 
@@ -433,11 +525,29 @@ _PRODUCTION_STRATEGY_MAP: Dict[str, str] = {
 }
 
 
+def _line_signature(line: LineString) -> tuple:
+    return tuple((round(float(x), 3), round(float(y), 3)) for x, y in line.coords)
+
+
+def _network_signature(network: RoadNetwork) -> tuple:
+    ordered_lines = tuple(sorted((_line_signature(line) for line in network.centerlines)))
+    ordered_params = tuple(sorted((str(key), round(float(value), 3) if isinstance(value, (int, float)) else str(value)) for key, value in network.params.items()))
+    return (
+        str(network.generator_type),
+        len(network.centerlines),
+        round(sum(line.length for line in network.centerlines), 3),
+        ordered_params,
+        ordered_lines,
+    )
+
+
 def generate_candidates(
     parcel_polygon: Polygon,
     area_sqft:      float,
     n:              int = 30,
     seed:           int = 0,
+    *,
+    design_targets: Optional[Dict[str, float]] = None,
 ) -> List[RoadNetwork]:
     """
     Generate n road network candidates for a parcel polygon.
@@ -449,52 +559,37 @@ def generate_candidates(
         parcel_polygon: shapely Polygon in local feet
         area_sqft:      parcel area in sqft (used for parameter scaling)
         n:              number of candidates to generate
-        seed:           random seed
+        seed:           deterministic variant offset
 
     Returns:
         List of RoadNetwork objects.
     """
-    rng = random.Random(seed)
     profile = _polygon_profile(parcel_polygon)
-    types, weights = _weighted_types(profile)
+    types, _weights = _weighted_types(profile)
     candidates: List[RoadNetwork] = []
-
-    # Ensure at least 1 of each type
-    for gt in types:
+    target_count = max(n, len(types))
+    variant_cursor = max(0, seed)
+    while len(candidates) < target_count:
+        gt = types[(variant_cursor - seed) % len(types)]
         fn = _GENERATORS[gt]
         try:
-            net = fn(parcel_polygon, rng)
+            net = fn(parcel_polygon, variant_index=variant_cursor, **_strategy_kwargs(gt, profile, design_targets))
             if _candidate_is_viable(net, parcel_polygon, profile):
                 candidates.append(net)
         except Exception:
             pass
-
-    # Fill remainder proportionally
-    remaining = n - len(candidates)
-    if remaining > 0:
-        chosen_types = rng.choices(types, weights=weights, k=remaining * 2)
-        for gt in chosen_types:
-            fn = _GENERATORS[gt]
-            try:
-                net = fn(parcel_polygon, rng)
-                if _candidate_is_viable(net, parcel_polygon, profile):
-                    candidates.append(net)
-                if len(candidates) >= n:
-                    break
-            except Exception:
-                pass
+        variant_cursor += 1
 
     if not candidates:
         for gt in ("spine", "loop_custom", "t_junction"):
             fn = _GENERATORS[gt]
             try:
-                net = fn(parcel_polygon, rng)
+                net = fn(parcel_polygon, variant_index=seed, **_strategy_kwargs(gt, profile, design_targets))
                 if net.centerlines:
                     candidates.append(net)
             except Exception:
                 continue
 
-    rng.shuffle(candidates)
     return candidates[:n]
 
 
@@ -505,6 +600,7 @@ def generate_candidates_multi_strategy(
     seed: int = 0,
     *,
     strategies: Optional[List[str]] = None,
+    design_targets: Optional[Dict[str, float]] = None,
 ) -> List[RoadNetwork]:
     """Generate and aggregate candidates independently per strategy.
 
@@ -522,19 +618,22 @@ def generate_candidates_multi_strategy(
     if not canonical:
         canonical = ["grid", "spine", "cul_de_sac"]
 
-    base_rng = random.Random(seed)
     profile = _polygon_profile(parcel_polygon)
     per_strategy = max(1, math.ceil(n / max(len(canonical), 1)))
     aggregated: List[RoadNetwork] = []
 
     for index, strategy in enumerate(canonical):
         fn = _GENERATORS[strategy]
-        local_rng = random.Random(base_rng.randint(0, 10_000_000) + index)
         produced = 0
-        attempts = per_strategy * 3
-        for _ in range(attempts):
+        attempts = per_strategy * 4
+        for attempt in range(attempts):
             try:
-                network = fn(parcel_polygon, local_rng)
+                variant_index = (seed * 17) + (index * 101) + attempt
+                network = fn(
+                    parcel_polygon,
+                    variant_index=variant_index,
+                    **_strategy_kwargs(strategy, profile, design_targets),
+                )
             except Exception:
                 continue
             if not _candidate_is_viable(network, parcel_polygon, profile):
@@ -545,24 +644,19 @@ def generate_candidates_multi_strategy(
                 break
 
     if len(aggregated) < n:
-        fallback = generate_candidates(parcel_polygon, area_sqft, n=n, seed=seed + 97)
+        fallback = generate_candidates(parcel_polygon, area_sqft, n=n, seed=seed + 97, design_targets=design_targets)
         aggregated.extend(fallback)
 
     deduped: List[RoadNetwork] = []
     seen = set()
     for network in aggregated:
-        signature = (
-            network.generator_type,
-            len(network.centerlines),
-            round(sum(line.length for line in network.centerlines), 1),
-        )
+        signature = _network_signature(network)
         if signature in seen:
             continue
         seen.add(signature)
         deduped.append(network)
-        if len(deduped) >= n:
-            break
 
     if not deduped:
-        return generate_candidates(parcel_polygon, area_sqft, n=n, seed=seed + 193)
+        return generate_candidates(parcel_polygon, area_sqft, n=n, seed=seed + 193, design_targets=design_targets)
+    deduped.sort(key=_network_signature)
     return deduped[:n]
