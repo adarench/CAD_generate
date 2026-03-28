@@ -114,9 +114,11 @@ def _design_targets(design_targets: Optional[Dict[str, float]]) -> Dict[str, flo
     payload = design_targets or {}
     lot_depth_ft = float(payload.get("lot_depth_ft", 110.0) or 110.0)
     min_frontage_ft = float(payload.get("min_frontage_ft", 50.0) or 50.0)
+    lot_depth_cap_ft = float(payload.get("lot_depth_cap_ft", 1600.0) or 1600.0)
+    min_frontage_cap_ft = float(payload.get("min_frontage_cap_ft", 240.0) or 240.0)
     return {
-        "lot_depth_ft": max(70.0, min(160.0, lot_depth_ft)),
-        "min_frontage_ft": max(35.0, min(95.0, min_frontage_ft)),
+        "lot_depth_ft": max(70.0, min(lot_depth_cap_ft, lot_depth_ft)),
+        "min_frontage_ft": max(35.0, min(min_frontage_cap_ft, min_frontage_ft)),
     }
 
 

@@ -44,19 +44,21 @@ export function normalizeParcel(source: ParcelSourcePayload): ParcelRecord {
   }
 
   const centroid = estimateCentroid(source.geometry);
+  const areaSqft = source.areaSqft ?? estimateAreaSqft(source.geometry);
+  const areaAcres = source.areaAcres ?? (areaSqft ? areaSqft / 43560 : null);
 
   return {
     id: source.id ?? `${slug(source.county ?? "utah")}-${source.apn ?? "unknown"}`,
     state: "UT",
     county: source.county ?? "Unknown",
     apn: source.apn ?? null,
-    sourceProvider: source.sourceProvider ?? "Local Demo",
-    sourceDataset: source.sourceDataset ?? "demo-parcels",
+    sourceProvider: source.sourceProvider ?? "Unknown",
+    sourceDataset: source.sourceDataset ?? "parcel-source",
     sourceObjectId: source.sourceObjectId ?? null,
     geometryGeoJSON: source.geometry,
     centroid,
-    areaSqft: source.areaSqft ?? null,
-    areaAcres: source.areaAcres ?? null,
+    areaSqft,
+    areaAcres,
     address: source.address ?? null,
     ownerName: source.ownerName ?? null,
     zoningCode: source.zoningCode ?? null,
@@ -104,6 +106,28 @@ function estimateCentroid(geometry: Polygon | MultiPolygon) {
     lng: totals.lng / count,
     lat: totals.lat / count,
   };
+}
+
+function estimateAreaSqft(geometry: Polygon | MultiPolygon) {
+  const rings = geometry.type === "Polygon" ? geometry.coordinates : geometry.coordinates.flat();
+  const squareDegrees = rings.reduce((sum, ring) => sum + Math.abs(ringArea(ring)), 0);
+  if (squareDegrees <= 0) return null;
+
+  const centroid = estimateCentroid(geometry);
+  const feetPerDegreeLat = 364000;
+  const feetPerDegreeLng = feetPerDegreeLat * Math.cos((centroid.lat * Math.PI) / 180);
+  return Math.round(squareDegrees * feetPerDegreeLat * Math.max(feetPerDegreeLng, 1));
+}
+
+function ringArea(ring: number[][]) {
+  if (ring.length < 3) return 0;
+  let area = 0;
+  for (let index = 0; index < ring.length - 1; index += 1) {
+    const [x1, y1] = ring[index];
+    const [x2, y2] = ring[index + 1];
+    area += x1 * y2 - x2 * y1;
+  }
+  return area / 2;
 }
 
 function slug(value: string) {

@@ -5,5 +5,5 @@ interface PlannerRedirectPageProps {
 }
 
 export default function PlannerRedirectPage({ params }: PlannerRedirectPageProps) {
-  redirect(`/studio/${params.parcelId}`);
+  redirect(`/opportunities`);
 }

@@ -7,8 +7,6 @@ export type MapViewState = {
 export type BasemapMode = "drawing" | "gis" | "aerial";
 
 export const DEFAULT_MAP_COUNTY = "Salt Lake";
-export const DEFAULT_STUDIO_DEMO_PARCEL_ID = "ut-SaltLake-03201000010000";
-export const DEFAULT_STUDIO_DEMO_APN = "03201000010000";
 
 export const COUNTY_DEFAULT_VIEWS: Record<string, MapViewState> = {
   "Salt Lake": { lng: -111.83684683892612, lat: 40.61985292120375, zoom: 16.35 },

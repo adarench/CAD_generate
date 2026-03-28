@@ -55,10 +55,9 @@ export async function fetchParcelsForBounds(
       return parcels;
     }
   } catch {
-    // Fall back to deterministic synthetic coverage below.
+    return [];
   }
-
-  return generateSyntheticParcels(county, bounds, limit, zoom ?? null);
+  return [];
 }
 
 export async function fetchParcelByClick(
@@ -86,16 +85,16 @@ export async function fetchParcelByClick(
       };
     }
   } catch {
-    // Fall through to synthetic selection.
+    return {
+      selected: null,
+      candidates: [],
+      message: "No live parcel found at that location.",
+    };
   }
-
-  const syntheticBounds = syntheticBoundsAroundPoint(lng, lat, zoom ?? 14);
-  const synthetic = generateSyntheticParcels(county, syntheticBounds, 64, zoom ?? 14);
-  const selected = pickContainingSyntheticParcel(synthetic, lng, lat) ?? synthetic[0] ?? null;
   return {
-    selected,
-    candidates: selected ? [selected] : [],
-    message: selected ? "Selected parcel from synthetic fallback coverage." : "No parcel found at that location.",
+    selected: null,
+    candidates: [],
+    message: "No live parcel found at that location.",
   };
 }
 
@@ -117,29 +116,12 @@ export async function searchParcelsByApn(county: string, apn: string): Promise<P
       if (parcels.length) return parcels;
     }
   } catch {
-    // Ignore and fall back to synthetic search.
+    return [];
   }
-
-  const center = COUNTY_DEFAULT_VIEWS[county] ?? DEFAULT_MAP_VIEW;
-  const synthetic = generateSyntheticParcels(
-    county,
-    {
-      minLng: center.lng - 0.025,
-      minLat: center.lat - 0.02,
-      maxLng: center.lng + 0.025,
-      maxLat: center.lat + 0.02,
-    },
-    200,
-    14
-  );
-  const normalizedQuery = normalizeSearch(trimmed);
-  return synthetic.filter((parcel) => normalizeSearch(parcel.apn ?? "").includes(normalizedQuery));
+  return [];
 }
 
 export async function fetchParcelById(id: string): Promise<ParcelRecord | null> {
-  const synthetic = syntheticParcelFromId(id);
-  if (synthetic) return synthetic;
-
   const parsed = parseArcgisParcelId(id);
   if (!parsed) return null;
 
@@ -268,104 +250,6 @@ function closeRing(ring: number[][]) {
   return [...ring, [firstLng, firstLat]];
 }
 
-function generateSyntheticParcels(county: string, bounds: Bounds, limit: number, zoom?: number | null): ParcelRecord[] {
-  const requested = Math.max(36, Math.min(limit, 2500));
-  const width = Math.max(bounds.maxLng - bounds.minLng, 0.0015);
-  const height = Math.max(bounds.maxLat - bounds.minLat, 0.0015);
-  const aspect = Math.max(width / height, 0.5);
-  const cols = Math.max(6, Math.round(Math.sqrt(requested * aspect)));
-  const rows = Math.max(6, Math.round(requested / cols));
-  const dx = width / cols;
-  const dy = height / rows;
-  const streetGapX = dx * 0.12;
-  const streetGapY = dy * 0.12;
-  const parcels: ParcelRecord[] = [];
-
-  for (let row = 0; row < rows && parcels.length < requested; row += 1) {
-    for (let col = 0; col < cols && parcels.length < requested; col += 1) {
-      if ((row + 1) % 7 === 0 || (col + 1) % 9 === 0) {
-        continue;
-      }
-      const minLng = bounds.minLng + col * dx + streetGapX;
-      const maxLng = bounds.minLng + (col + 1) * dx - streetGapX;
-      const minLat = bounds.minLat + row * dy + streetGapY;
-      const maxLat = bounds.minLat + (row + 1) * dy - streetGapY;
-      if (maxLng <= minLng || maxLat <= minLat) continue;
-
-      const id = syntheticId(county, minLng, minLat, maxLng, maxLat);
-      parcels.push(
-        normalizeParcel({
-          id,
-          county,
-          apn: `SYN-${row + 1}-${col + 1}`,
-          geometry: {
-            type: "Polygon",
-            coordinates: [[
-              [minLng, minLat],
-              [maxLng, minLat],
-              [maxLng, maxLat],
-              [minLng, maxLat],
-              [minLng, minLat],
-            ]],
-          },
-          sourceProvider: "Synthetic Fallback",
-          sourceDataset: zoom && zoom >= 13 ? "synthetic-parcels-dense" : "synthetic-parcels",
-          sourceObjectId: `${row}-${col}`,
-          areaSqft: estimateAreaSqft(minLng, minLat, maxLng, maxLat),
-          zoningCode: "DISCOVERY",
-          rawAttributes: {
-            generated: true,
-            row,
-            col,
-            county,
-          },
-        })
-      );
-    }
-  }
-
-  return parcels;
-}
-
-function syntheticId(county: string, minLng: number, minLat: number, maxLng: number, maxLat: number) {
-  return [
-    "synthetic",
-    slugifyCounty(county),
-    minLng.toFixed(6),
-    minLat.toFixed(6),
-    maxLng.toFixed(6),
-    maxLat.toFixed(6),
-  ].join("__");
-}
-
-function syntheticParcelFromId(id: string): ParcelRecord | null {
-  const parts = id.split("__");
-  if (parts.length !== 6 || parts[0] !== "synthetic") return null;
-  const county = countyBySlug.get(parts[1]) ?? titleCaseSlug(parts[1]);
-  const [minLng, minLat, maxLng, maxLat] = parts.slice(2).map(Number);
-  if (![minLng, minLat, maxLng, maxLat].every((value) => Number.isFinite(value))) return null;
-  return normalizeParcel({
-    id,
-    county,
-    apn: "SYNTHETIC",
-    geometry: {
-      type: "Polygon",
-      coordinates: [[
-        [minLng, minLat],
-        [maxLng, minLat],
-        [maxLng, maxLat],
-        [minLng, maxLat],
-        [minLng, minLat],
-      ]],
-    },
-    sourceProvider: "Synthetic Fallback",
-    sourceDataset: "synthetic-parcels",
-    areaSqft: estimateAreaSqft(minLng, minLat, maxLng, maxLat),
-    zoningCode: "DISCOVERY",
-    rawAttributes: { generated: true },
-  });
-}
-
 function parseArcgisParcelId(id: string) {
   const match = /^ut-([a-z0-9-]+)-(\d+)$/.exec(id);
   if (!match) return null;
@@ -384,46 +268,4 @@ function slugifyCounty(county: string) {
 
 function slugifyValue(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "parcel";
-}
-
-function titleCaseSlug(slug: string) {
-  return slug
-    .split("-")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-function syntheticBoundsAroundPoint(lng: number, lat: number, zoom: number): Bounds {
-  const span = zoom >= 14 ? 0.01 : zoom >= 12 ? 0.02 : 0.04;
-  return {
-    minLng: lng - span,
-    minLat: lat - span * 0.75,
-    maxLng: lng + span,
-    maxLat: lat + span * 0.75,
-  };
-}
-
-function pickContainingSyntheticParcel(parcels: ParcelRecord[], lng: number, lat: number) {
-  return parcels.find((parcel) => {
-    const ring =
-      parcel.geometryGeoJSON.type === "Polygon"
-        ? parcel.geometryGeoJSON.coordinates[0]
-        : parcel.geometryGeoJSON.coordinates[0]?.[0];
-    if (!ring?.length) return false;
-    const lngs = ring.map((point) => point[0]);
-    const lats = ring.map((point) => point[1]);
-    return lng >= Math.min(...lngs) && lng <= Math.max(...lngs) && lat >= Math.min(...lats) && lat <= Math.max(...lats);
-  }) ?? null;
-}
-
-function estimateAreaSqft(minLng: number, minLat: number, maxLng: number, maxLat: number) {
-  const latFeet = (maxLat - minLat) * 364000;
-  const avgLat = (minLat + maxLat) / 2;
-  const lngFeet = (maxLng - minLng) * 364000 * Math.cos((avgLat * Math.PI) / 180);
-  return Math.max(Math.round(Math.abs(latFeet * lngFeet)), 1000);
-}
-
-function normalizeSearch(value: string) {
-  return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
 }

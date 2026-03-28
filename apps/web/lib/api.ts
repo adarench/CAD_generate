@@ -45,11 +45,36 @@ function extractErrorMessage(payload: unknown): string | null {
   if (typeof payload === "string") return payload;
   if (!payload || typeof payload !== "object") return null;
   const record = payload as Record<string, unknown>;
+  const formatDetail = (detail: Record<string, unknown>) => {
+    const pieces: string[] = [];
+    if (typeof detail.reason_category === "string") {
+      pieces.push(detail.reason_category.replace(/_/g, " "));
+    }
+    if (typeof detail.message === "string") {
+      pieces.push(detail.message);
+    } else if (typeof detail.error === "string") {
+      pieces.push(detail.error);
+    }
+    const constraints: string[] = [];
+    if (typeof detail.min_lot_area_sqft === "number") {
+      constraints.push(`min lot ${Math.round(detail.min_lot_area_sqft).toLocaleString()} sqft`);
+    }
+    if (typeof detail.required_frontage_ft === "number") {
+      constraints.push(`required frontage ${detail.required_frontage_ft.toFixed(1)} ft`);
+    }
+    if (typeof detail.approx_frontage_ft === "number") {
+      constraints.push(`available frontage ${detail.approx_frontage_ft.toFixed(1)} ft`);
+    }
+    if (constraints.length) {
+      pieces.push(constraints.join(" | "));
+    }
+    return pieces.filter(Boolean).join(" — ");
+  };
   if (typeof record.detail === "string") return record.detail;
   if (record.detail && typeof record.detail === "object") {
     const detail = record.detail as Record<string, unknown>;
-    if (typeof detail.message === "string") return detail.message;
-    if (typeof detail.error === "string") return detail.error;
+    const formatted = formatDetail(detail);
+    if (formatted) return formatted;
   }
   if (typeof record.error === "string") return record.error;
   if (typeof record.message === "string") return record.message;
@@ -66,16 +91,22 @@ function buildQuery(params: Record<string, string | number | undefined | null>) 
   return serialized ? `?${serialized}` : "";
 }
 
-export async function fetchParcelByClick(lng: number, lat: number, county: string) {
+export async function fetchParcelByClick(
+  lng: number,
+  lat: number,
+  county: string,
+  options?: { signal?: AbortSignal }
+) {
   const url = `/api/parcels/by-click${buildQuery({ lng, lat, county })}`;
-  return parseResponse<ParcelLookupResponse>(await fetch(url));
+  return parseResponse<ParcelLookupResponse>(await fetch(url, { signal: options?.signal }));
 }
 
 export async function fetchParcelsInBounds(
   county: string,
   bounds: { minLng: number; minLat: number; maxLng: number; maxLat: number },
   limit = 2000,
-  zoom?: number
+  zoom?: number,
+  options?: { signal?: AbortSignal }
 ) {
   const url = `/api/parcels/in-bounds${buildQuery({
     county,
@@ -90,7 +121,9 @@ export async function fetchParcelsInBounds(
     console.log("[parcel-bbox] request", { county, bounds, limit, zoom });
   }
   try {
-    const parcels = await parseResponse<DiscoveryParcelRecord[]>(await fetch(url));
+    const parcels = await parseResponse<DiscoveryParcelRecord[]>(
+      await fetch(url, { signal: options?.signal })
+    );
     if (PARCEL_DEBUG_ENABLED) {
       console.log("[parcel-bbox] response", {
         county,
@@ -107,9 +140,13 @@ export async function fetchParcelsInBounds(
   }
 }
 
-export async function searchParcelByApn(county: string, apn: string) {
+export async function searchParcelByApn(
+  county: string,
+  apn: string,
+  options?: { signal?: AbortSignal }
+) {
   const url = `/api/parcels/search${buildQuery({ county, apn })}`;
-  return parseResponse<DiscoveryParcelRecord[]>(await fetch(url));
+  return parseResponse<DiscoveryParcelRecord[]>(await fetch(url, { signal: options?.signal }));
 }
 
 export async function fetchDiscoveryParcel(parcelId: string) {

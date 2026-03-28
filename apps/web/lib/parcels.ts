@@ -94,35 +94,58 @@ export type BedrockFeasibilityResult = {
   schema_version: string;
   scenario_id: string;
   layout_id: string;
-  parcel_id?: string | null;
+  parcel_id: string;
   units: number;
   estimated_home_price: number;
+  price_per_sqft: number;
+  estimated_home_size_sqft: number;
+  construction_cost_per_sqft: number;
   construction_cost_per_home: number;
   development_cost_total: number;
   projected_revenue: number;
   projected_cost: number;
   projected_profit: number;
   ROI?: number | null;
+  ROI_base?: number | null;
+  ROI_best_case?: number | null;
+  ROI_worst_case?: number | null;
+  break_even_price?: number | null;
   profit_margin?: number | null;
   revenue_per_unit?: number | null;
   cost_per_unit?: number | null;
   risk_score?: number | null;
-  confidence?: number | null;
+  confidence: number;
+  confidence_score?: number | null;
+  key_risk_factors?: string[];
   status?: string | null;
   financial_summary?: Record<string, unknown>;
   assumptions?: Record<string, unknown>;
   constraint_violations?: string[];
 };
 
+export type NearFeasibleResult = {
+  schema_name: "NearFeasibleResult";
+  schema_version: string;
+  status: "near_feasible";
+  reason_category: string;
+  limiting_constraints: Record<string, unknown>;
+  required_relaxation: Record<string, unknown>;
+  best_attempt_summary: Record<string, unknown>;
+  financial_upside?: Record<string, unknown>;
+  attempted_strategies: string[];
+  attempted_repairs: string[];
+};
+
 export type PipelineRun = {
   schema_name: "PipelineRun";
   schema_version: string;
   run_id: string;
-  status: "completed" | "non_buildable" | "unsupported";
+  status: "completed" | "near_feasible" | "failed";
   parcel_id: string;
   zoning_result: BedrockZoningRules;
   layout_result?: BedrockLayoutResult | null;
   feasibility_result?: BedrockFeasibilityResult | null;
+  near_feasible_result?: NearFeasibleResult | null;
   timestamp: string;
   git_commit?: string | null;
   input_hash?: string | null;
@@ -185,7 +208,7 @@ export type ParcelRecord = DiscoveryParcelRecord;
 export type RunSummary = PipelineRunSummary;
 export type RunDetail = PipelineRun;
 export type OptimizationResponse = LayoutVisualizationResult;
-export type PipelineRunUiState = "buildable" | "non_buildable" | "unsupported";
+export type PipelineRunUiState = "buildable" | "near_feasible" | "failed";
 
 export function parcelLoadRequestFromDiscovery(parcel: DiscoveryParcelRecord) {
   return {
@@ -245,15 +268,15 @@ export function layoutVisualizationFromLayoutResult(
 export function pipelineRunUiState(run: PipelineRun | null | undefined): PipelineRunUiState | null {
   if (!run) return null;
   if (run.status === "completed") return "buildable";
-  if (run.status === "non_buildable") return "non_buildable";
-  return "unsupported";
+  if (run.status === "near_feasible") return "near_feasible";
+  return "failed";
 }
 
 export function pipelineRunStateLabel(run: PipelineRun | null | undefined): string {
   const state = pipelineRunUiState(run);
   if (state === "buildable") return "Buildable";
-  if (state === "non_buildable") return "Non-buildable";
-  if (state === "unsupported") return "Unsupported";
+  if (state === "near_feasible") return "Near-feasible";
+  if (state === "failed") return "Failed";
   return "Not run";
 }
 
@@ -262,11 +285,15 @@ export function pipelineRunExplanation(run: PipelineRun | null | undefined): str
   if (run.status === "completed") {
     return "The parcel produced a complete layout and feasibility result.";
   }
-  if (run.status === "non_buildable") {
-    const reason = run.bypass_reason ? run.bypass_reason.replace(/_/g, " ") : "non-buildable zoning constraints";
-    return `${run.zoning_result.district} is currently treated as non-buildable because of ${reason}.`;
+  if (run.status === "near_feasible") {
+    const reason = run.near_feasible_result?.reason_category
+      ? run.near_feasible_result.reason_category.replace(/_/g, " ")
+      : run.bypass_reason
+        ? run.bypass_reason.replace(/_/g, " ")
+        : "layout or zoning constraints";
+    return `${run.zoning_result.district} is close to feasible but currently blocked by ${reason}.`;
   }
-  return `${run.zoning_result.district} is not yet supported by the current pipeline capabilities.`;
+  return `${run.zoning_result.district} failed to produce a completed or near-feasible outcome.`;
 }
 
 export function layoutResultToFeatureCollection(

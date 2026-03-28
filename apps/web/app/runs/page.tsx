@@ -1,116 +1,212 @@
 "use client";
 
 import Link from "next/link";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { fetchRun, fetchRuns } from "@/lib/api";
-import { pipelineRunStateLabel, type PipelineRun } from "@/lib/parcels";
+import { buildParcelMemory } from "@/lib/runMemory";
 
 export default function RunsPage() {
   const runsQuery = useQuery({
-    queryKey: ["runs-page"],
-    queryFn: () => fetchRuns({ limit: 20, sort: "timestamp", order: "desc" }),
+    queryKey: ["runs-memory-index"],
+    queryFn: async () => {
+      const summaries = await fetchRuns({ limit: 48, sort: "timestamp", order: "desc" });
+      const details = await Promise.all(
+        summaries
+          .filter((summary) => summary.parcel_id)
+          .map((summary) => fetchRun(summary.run_id))
+      );
+      return details;
+    },
+    retry: false,
   });
-  const runDetailQueries = useQueries({
-    queries: (runsQuery.data ?? []).map((summary) => ({
-      queryKey: ["runs-page-detail", summary.run_id],
-      queryFn: () => fetchRun(summary.run_id),
-      retry: false,
-    })),
-  });
-  const runsById = new Map(
-    runDetailQueries
-      .map((query) => query.data)
-      .filter((run): run is PipelineRun => Boolean(run))
-      .map((run) => [run.run_id, run])
-  );
+
+  const parcelMemories = useMemo(() => {
+    const grouped = new Map<string, ReturnType<typeof buildParcelMemory>>();
+    for (const run of runsQuery.data ?? []) {
+      const parcelId = run.parcel_id;
+      if (!parcelId) continue;
+      const existingRuns = grouped.get(parcelId)?.runs ?? [];
+      grouped.set(parcelId, buildParcelMemory([...existingRuns, run]));
+    }
+    return Array.from(grouped.values())
+      .filter((memory): memory is NonNullable<typeof memory> => Boolean(memory))
+      .sort((left, right) => Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt));
+  }, [runsQuery.data]);
 
   return (
-    <div className="px-6 py-8">
-      <div className="mx-auto max-w-[1400px]">
-        <div className="flex items-end justify-between gap-4">
+    <div className="min-h-[calc(100vh-72px)] bg-slate-950 px-6 py-8 text-slate-100">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-8 flex items-end justify-between gap-4">
           <div>
-            <div className="text-xs uppercase tracking-[0.32em] text-slate-500">Saved runs</div>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-100">
-              Bedrock feasibility history and saved pipeline runs
-            </h1>
+            <p className="text-xs uppercase tracking-[0.32em] text-slate-500">Decision memory</p>
+            <h1 className="mt-3 text-3xl font-semibold tracking-tight">Parcel run memory</h1>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-400">
+              This view is parcel-centric. It shows what the system currently thinks about each parcel,
+              what it thought before, and how that recommendation changed.
+            </p>
           </div>
           <Link
-            href="/map"
-            className="rounded-2xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200"
+            href="/opportunities"
+            className="inline-flex rounded-2xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200"
           >
-            Open parcel map
+            Back to opportunities
           </Link>
         </div>
 
-        <div className="mt-8 rounded-[28px] border border-slate-800 bg-slate-900/70 p-6">
-          <div className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr_1fr] gap-3 px-4 text-xs uppercase tracking-[0.24em] text-slate-500">
-            <span>Parcel</span>
-            <span>Status</span>
-            <span>Units</span>
-            <span>Profit</span>
-            <span>ROI</span>
-            <span>Timestamp</span>
+        {runsQuery.isLoading ? (
+          <EmptyState copy="Loading parcel memory from saved pipeline runs..." />
+        ) : runsQuery.isError ? (
+          <EmptyState copy={runsQuery.error instanceof Error ? runsQuery.error.message : "Run memory failed to load."} />
+        ) : parcelMemories.length ? (
+          <div className="grid gap-4">
+            {parcelMemories.map((memory) => (
+              <article
+                key={memory.parcel_id}
+                className="rounded-[28px] border border-slate-800 bg-slate-900/70 p-5"
+              >
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="font-mono text-sm text-slate-300">{memory.parcel_id}</span>
+                      <StatusPill status={memory.latest.status} />
+                      <DecisionPill label={memory.latest.decision_label} />
+                    </div>
+                    <p className="mt-3 text-lg font-semibold text-slate-100">{memory.latest.jurisdiction}</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-400">{memory.latest.decision_summary}</p>
+                  </div>
+                  <div className="grid gap-2 text-sm text-slate-300">
+                    <div>
+                      <span className="text-slate-500">Last updated:</span> {formatTimestamp(memory.lastUpdatedAt)}
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Current recommendation:</span> {memory.latest.decision_label}
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Previous recommendation:</span>{" "}
+                      {memory.previous?.decision_label ?? "No prior recommendation"}
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Saved runs:</span> {memory.runCount}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-3 md:grid-cols-3">
+                  <MetricCard label="ROI" value={formatPercent(memory.latest.ROI_base)} />
+                  <MetricCard label="Projected profit" value={formatCurrency(memory.latest.projected_profit)} />
+                  <MetricCard label="Confidence" value={formatPercent(memory.latest.confidence_score)} />
+                </div>
+
+                <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
+                  <span className="text-slate-500">Change across runs:</span>{" "}
+                  {memory.changes.summary ?? "No change summary available."}
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {memory.statusHistory.map((status, index) => (
+                    <StatusPill key={`${memory.parcel_id}-${index}-${status}`} status={status} compact />
+                  ))}
+                </div>
+
+                <div className="mt-5 flex flex-wrap gap-3">
+                  <Link
+                    href={`/studio/${memory.parcel_id}`}
+                    className="inline-flex rounded-2xl border border-cyan-400/40 px-4 py-2 text-sm font-semibold text-cyan-300"
+                  >
+                    Inspect parcel
+                  </Link>
+                  <Link
+                    href={`/runs/${memory.latest.run_id}`}
+                    className="inline-flex rounded-2xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200"
+                  >
+                    Open latest saved run
+                  </Link>
+                </div>
+              </article>
+            ))}
           </div>
-          <div className="mt-4 space-y-3">
-            {(runsQuery.data ?? []).map((summary) => {
-              const run = runsById.get(summary.run_id);
-              return (
-                <Link
-                  key={summary.run_id}
-                  href={`/runs/${summary.run_id}`}
-                  className="grid grid-cols-[1.5fr_1fr_1fr_1fr_1fr_1fr] gap-3 rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm text-slate-300 transition hover:border-slate-600"
-                >
-                  <span className="font-semibold text-slate-100">{summary.parcel_id ?? "—"}</span>
-                  <RunStateBadge run={run} />
-                  <span>{summary.units ?? "—"}</span>
-                  <span>{formatCurrency(summary.projected_profit)}</span>
-                  <span>{formatPercent(summary.ROI)}</span>
-                  <span>{formatTimestamp(summary.timestamp)}</span>
-                </Link>
-              );
-            })}
-            {!runsQuery.data?.length ? (
-              <div className="rounded-2xl border border-dashed border-slate-700 px-4 py-8 text-sm text-slate-500">
-                No Bedrock pipeline runs saved yet. Open Studio and execute the pipeline to seed history.
-              </div>
-            ) : null}
-          </div>
-        </div>
+        ) : (
+          <EmptyState copy="No saved parcel memory exists yet. Run the pipeline on at least one parcel to populate this view." />
+        )}
       </div>
     </div>
   );
 }
 
-function RunStateBadge({ run }: { run?: PipelineRun | null }) {
-  if (!run) {
-    return <span className="text-xs text-slate-500">Loading…</span>;
-  }
-  const tone =
-    run.status === "completed"
-      ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
-      : run.status === "non_buildable"
-        ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
-        : "border-rose-400/40 bg-rose-400/10 text-rose-300";
+function EmptyState({ copy }: { copy: string }) {
   return (
-    <span className={`inline-flex w-fit rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${tone}`}>
-      {pipelineRunStateLabel(run)}
+    <div className="rounded-[28px] border border-slate-800 bg-slate-900/70 p-8 text-sm text-slate-400">
+      {copy}
+    </div>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+      <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{label}</div>
+      <div className="mt-2 text-lg font-semibold text-slate-100">{value}</div>
+    </div>
+  );
+}
+
+function DecisionPill({ label }: { label: "BUY" | "CONDITIONAL" | "PASS" | "PENDING" }) {
+  const tone =
+    label === "BUY"
+      ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+      : label === "CONDITIONAL"
+        ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+        : label === "PASS"
+          ? "border-rose-400/40 bg-rose-400/10 text-rose-300"
+          : "border-slate-600 bg-slate-800 text-slate-300";
+  return <span className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${tone}`}>{label}</span>;
+}
+
+function StatusPill({
+  status,
+  compact = false,
+}: {
+  status: "loading" | "completed" | "near_feasible" | "failed";
+  compact?: boolean;
+}) {
+  const tone =
+    status === "completed"
+      ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+      : status === "near_feasible"
+        ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+        : status === "failed"
+          ? "border-rose-400/40 bg-rose-400/10 text-rose-300"
+          : "border-slate-600 bg-slate-800 text-slate-300";
+  return (
+    <span className={`inline-flex rounded-full border ${compact ? "px-2 py-1" : "px-3 py-1"} text-[11px] font-semibold uppercase tracking-[0.18em] ${tone}`}>
+      {status.replace(/_/g, " ")}
     </span>
   );
 }
 
+function formatTimestamp(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function formatCurrency(value: number | null | undefined) {
   if (typeof value !== "number" || Number.isNaN(value)) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
 }
 
 function formatPercent(value: number | null | undefined) {
   if (typeof value !== "number" || Number.isNaN(value)) return "—";
   return `${(value * 100).toFixed(1)}%`;
-}
-
-function formatTimestamp(value: string) {
-  const timestamp = new Date(value);
-  if (Number.isNaN(timestamp.getTime())) return value;
-  return timestamp.toLocaleString();
 }

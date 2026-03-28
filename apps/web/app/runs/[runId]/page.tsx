@@ -5,7 +5,8 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { PlanSvgCanvas } from "@/components/studio/PlanSvgCanvas";
-import { fetchBedrockParcel, fetchRun } from "@/lib/api";
+import { fetchBedrockParcel, fetchRun, fetchRuns } from "@/lib/api";
+import { buildParcelMemory } from "@/lib/runMemory";
 import {
   layoutVisualizationFromPipelineRun,
   pipelineRunExplanation,
@@ -32,10 +33,21 @@ export default function RunPage({ params }: RunProps) {
     enabled: Boolean(runQuery.data?.parcel_id),
     retry: false,
   });
+  const parcelMemoryQuery = useQuery({
+    queryKey: ["run-memory", runQuery.data?.parcel_id],
+    queryFn: async () => {
+      const summaries = await fetchRuns({ limit: 48, sort: "timestamp", order: "desc" });
+      const matching = summaries.filter((summary) => summary.parcel_id === runQuery.data?.parcel_id);
+      return Promise.all(matching.map((summary) => fetchRun(summary.run_id)));
+    },
+    enabled: Boolean(runQuery.data?.parcel_id),
+    retry: false,
+  });
   const [visibleLayers, setVisibleLayers] = useState<(typeof layerOptions)[number][]>([...layerOptions]);
 
   const run = runQuery.data ?? null;
   const parcel = parcelQuery.data ?? null;
+  const parcelMemory = useMemo(() => buildParcelMemory(parcelMemoryQuery.data ?? []), [parcelMemoryQuery.data]);
   const studioParcel = parcel ? studioParcelFromBedrock(parcel) : null;
   const runState = pipelineRunUiState(run);
   const explanation = pipelineRunExplanation(run);
@@ -62,7 +74,7 @@ export default function RunPage({ params }: RunProps) {
               href={`/studio/${run.parcel_id}`}
               className="mt-4 inline-flex rounded-2xl border border-cyan-400/40 px-4 py-2 text-sm font-semibold text-cyan-300"
             >
-              Open parcel in Studio
+              Open parcel decision view
             </Link>
           ) : null}
         </Panel>
@@ -111,11 +123,38 @@ export default function RunPage({ params }: RunProps) {
           ) : null}
         </Panel>
 
+        <Panel title="Parcel memory">
+          {parcelMemory ? (
+            <div className="space-y-3 text-sm text-slate-300">
+              <p>
+                Latest recommendation:{" "}
+                <span className="font-semibold text-slate-100">{parcelMemory.latest.decision_label}</span>
+              </p>
+              <p>
+                Previous recommendation:{" "}
+                <span className="font-semibold text-slate-100">
+                  {parcelMemory.previous?.decision_label ?? "No prior recommendation"}
+                </span>
+              </p>
+              <p>Last updated: {formatTimestamp(parcelMemory.lastUpdatedAt)}</p>
+              <p>Saved runs: {parcelMemory.runCount}</p>
+              <p>{parcelMemory.changes.summary ?? "No change summary available."}</p>
+              <div className="flex flex-wrap gap-2 pt-1">
+                {parcelMemory.statusHistory.map((status, index) => (
+                  <RunStateBadge key={`${status}-${index}`} status={status} />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">No parcel history available yet.</p>
+          )}
+        </Panel>
+
         <Link
           href="/runs"
           className="mt-4 inline-flex rounded-2xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200"
         >
-          Back to run history
+          Back to parcel memory
         </Link>
       </aside>
 
@@ -129,7 +168,11 @@ export default function RunPage({ params }: RunProps) {
             <div className="space-y-3 text-sm text-slate-300">
               <p>{explanation}</p>
               <p>District: {run.zoning_result.district}</p>
-              {run.bypass_reason ? <p>Reason: {run.bypass_reason.replace(/_/g, " ")}</p> : null}
+              {run.near_feasible_result?.reason_category ? (
+                <p>Reason: {run.near_feasible_result.reason_category.replace(/_/g, " ")}</p>
+              ) : run.bypass_reason ? (
+                <p>Reason: {run.bypass_reason.replace(/_/g, " ")}</p>
+              ) : null}
             </div>
           ) : (
             <p className="text-sm text-slate-500">Loading run...</p>
@@ -144,12 +187,19 @@ export default function RunPage({ params }: RunProps) {
               <p>Projected cost: {formatCurrency(run.feasibility_result.projected_cost)}</p>
               <p>Projected profit: {formatCurrency(run.feasibility_result.projected_profit)}</p>
               <p>ROI: {formatPercent(run.feasibility_result.ROI)}</p>
+              <p>ROI base: {formatPercent(run.feasibility_result.ROI_base)}</p>
+              <p>ROI best case: {formatPercent(run.feasibility_result.ROI_best_case)}</p>
+              <p>ROI worst case: {formatPercent(run.feasibility_result.ROI_worst_case)}</p>
+              <p>Estimated home price: {formatCurrency(run.feasibility_result.estimated_home_price)}</p>
+              <p>Price / sqft: {formatCurrency(run.feasibility_result.price_per_sqft)}</p>
+              <p>Construction / sqft: {formatCurrency(run.feasibility_result.construction_cost_per_sqft)}</p>
+              <p>Break-even price: {formatCurrency(run.feasibility_result.break_even_price)}</p>
               <p>Risk score: {formatNumber(run.feasibility_result.risk_score)}</p>
-              <p>Confidence: {formatPercent(run.feasibility_result.confidence)}</p>
+              <p>Confidence: {formatPercent(run.feasibility_result.confidence_score ?? run.feasibility_result.confidence)}</p>
             </div>
           ) : run ? (
             <p className="text-sm text-slate-500">
-              Feasibility metrics are only available for buildable parcels that complete the full pipeline.
+              Feasibility metrics are only available for completed parcels.
             </p>
           ) : (
             <p className="text-sm text-slate-500">Loading run...</p>
@@ -187,19 +237,37 @@ export default function RunPage({ params }: RunProps) {
             <p className="text-sm text-slate-500">Loading zoning...</p>
           )}
         </Panel>
+
+        {run?.near_feasible_result ? (
+          <Panel title="Near-feasible detail">
+            <div className="space-y-3 text-sm text-slate-300">
+              <p>Reason category: {run.near_feasible_result.reason_category}</p>
+              <p>Attempted strategies: {run.near_feasible_result.attempted_strategies.join(", ") || "—"}</p>
+              <pre className="overflow-x-auto rounded-xl bg-slate-950/60 px-3 py-3 text-[11px] leading-5 text-slate-200">
+{JSON.stringify(run.near_feasible_result.limiting_constraints, null, 2)}
+              </pre>
+              <pre className="overflow-x-auto rounded-xl bg-slate-950/60 px-3 py-3 text-[11px] leading-5 text-slate-200">
+{JSON.stringify(run.near_feasible_result.required_relaxation, null, 2)}
+              </pre>
+              <pre className="overflow-x-auto rounded-xl bg-slate-950/60 px-3 py-3 text-[11px] leading-5 text-slate-200">
+{JSON.stringify(run.near_feasible_result.best_attempt_summary, null, 2)}
+              </pre>
+            </div>
+          </Panel>
+        ) : null}
       </aside>
     </div>
   );
 }
 
-function RunStateBadge({ status }: { status: "completed" | "non_buildable" | "unsupported" }) {
+function RunStateBadge({ status }: { status: "completed" | "near_feasible" | "failed" }) {
   const tone =
     status === "completed"
       ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
-      : status === "non_buildable"
+      : status === "near_feasible"
         ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
         : "border-rose-400/40 bg-rose-400/10 text-rose-300";
-  const label = status === "completed" ? "Buildable" : status === "non_buildable" ? "Non-buildable" : "Unsupported";
+  const label = status === "completed" ? "Buildable" : status === "near_feasible" ? "Near-feasible" : "Failed";
   return <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] ${tone}`}>{label}</span>;
 }
 

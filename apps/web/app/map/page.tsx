@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ClientMapView } from "@/components/ClientMapView";
 import {
@@ -11,28 +10,26 @@ import {
   parcelViewportLimitForZoom,
   useParcelViewportQuery,
 } from "@/hooks/useParcelViewportQuery";
-import { fetchParcelByClick, fetchRecentParcels, searchParcelByApn } from "@/lib/api";
+import { fetchParcelByClick, fetchRecentParcels, fetchRun, fetchRuns, searchParcelByApn } from "@/lib/api";
 import { COUNTY_DEFAULT_VIEWS, DEFAULT_MAP_COUNTY, DEFAULT_MAP_VIEW } from "@/lib/mapConfig";
-import {
-  assessOpportunity,
-  DEFAULT_OPPORTUNITY_FILTERS,
-  opportunityBadgeLabel,
-  summarizeOpportunity,
-  type OpportunityAssessment,
-  type OpportunityFilterState,
-} from "@/lib/opportunity";
 import { PARCEL_DEBUG_ENABLED } from "@/lib/parcelDebug";
-import type { ParcelRecord } from "@/lib/parcels";
+import type { ParcelRecord, PipelineRun } from "@/lib/parcels";
+import { useShortlist } from "@/lib/shortlist";
 import { SUPPORTED_UTAH_COUNTIES } from "@/services/parcels/arcgisParcelClient";
 
 const counties = [...SUPPORTED_UTAH_COUNTIES];
 
 export default function MapPage() {
-  const router = useRouter();
   const recentParcels = useQuery({
     queryKey: ["recent-parcels-map"],
     queryFn: () => fetchRecentParcels(6),
   });
+  const recentRunSummaries = useQuery({
+    queryKey: ["map-recent-runs"],
+    queryFn: () => fetchRuns({ limit: 120, sort: "timestamp", order: "desc" }),
+    staleTime: 30_000,
+  });
+  const shortlist = useShortlist();
   const [selectedParcel, setSelectedParcel] = useState<ParcelRecord | null>(null);
   const [candidateParcels, setCandidateParcels] = useState<ParcelRecord[]>([]);
   const [apnQuery, setApnQuery] = useState("");
@@ -53,27 +50,13 @@ export default function MapPage() {
   const [autoLoadedSearchKey, setAutoLoadedSearchKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lookupMessage, setLookupMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [opportunityFilters, setOpportunityFilters] = useState<OpportunityFilterState>(DEFAULT_OPPORTUNITY_FILTERS);
+  const [apnSearching, setApnSearching] = useState(false);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  const selectionAbortRef = useRef<AbortController | null>(null);
+  const selectionRequestIdRef = useRef(0);
   const visibleParcels = useParcelViewportQuery(county, viewport);
   const parcelFeatureCount = visibleParcels.data?.length ?? 0;
   const viewportLimit = parcelViewportLimitForZoom(viewport?.zoom);
-
-  const opportunityAssessments = useMemo(() => {
-    const entries = new Map<string, OpportunityAssessment>();
-    for (const parcel of visibleParcels.data ?? []) {
-      entries.set(parcel.id, assessOpportunity(parcel, opportunityFilters));
-    }
-    return entries;
-  }, [opportunityFilters, visibleParcels.data]);
-
-  const visibleOpportunityParcels = useMemo(
-    () =>
-      (visibleParcels.data ?? [])
-        .filter((parcel) => opportunityAssessments.get(parcel.id)?.likelyCandidate)
-        .sort((a, b) => (opportunityAssessments.get(b.id)?.score ?? 0) - (opportunityAssessments.get(a.id)?.score ?? 0)),
-    [opportunityAssessments, visibleParcels.data]
-  );
 
   const parcelContextGeoJSON = useMemo<GeoJSON.FeatureCollection | null>(() => {
     if (!parcelFeatureCount) {
@@ -86,14 +69,11 @@ export default function MapPage() {
         properties: {
           id: parcel.id,
           apn: parcel.apn,
-          opportunityCandidate: opportunityAssessments.get(parcel.id)?.likelyCandidate ?? false,
-          opportunityTier: opportunityAssessments.get(parcel.id)?.tier ?? "none",
-          opportunityScore: opportunityAssessments.get(parcel.id)?.score ?? 0,
         },
         geometry: parcel.geometryGeoJSON,
       })),
     };
-  }, [opportunityAssessments, parcelFeatureCount, visibleParcels.data]);
+  }, [parcelFeatureCount, visibleParcels.data]);
 
   const parcelLayerFeatureCount = parcelContextGeoJSON?.features.length ?? 0;
   const parcelRequestState = useMemo(() => {
@@ -144,10 +124,6 @@ export default function MapPage() {
     }),
     [county, parcelFeatureCount, parcelLayerFeatureCount, parcelRequestState, viewport, viewportLimit, visibleParcels.error]
   );
-  const selectedOpportunity = selectedParcel
-    ? opportunityAssessments.get(selectedParcel.id) ?? assessOpportunity(selectedParcel, opportunityFilters)
-    : null;
-
   useEffect(() => {
     if (!viewport) return;
     if (PARCEL_DEBUG_ENABLED) {
@@ -177,12 +153,47 @@ export default function MapPage() {
     });
   }, [selectedParcel]);
 
+  const latestRunSummaryForSelectedParcel = useMemo(() => {
+    if (!selectedParcel) return null;
+    return (recentRunSummaries.data ?? []).find((run) => run.parcel_id === selectedParcel.id) ?? null;
+  }, [recentRunSummaries.data, selectedParcel]);
+
+  const selectedParcelRunQuery = useQuery({
+    queryKey: ["map-selected-run", latestRunSummaryForSelectedParcel?.run_id],
+    queryFn: () => fetchRun(latestRunSummaryForSelectedParcel!.run_id),
+    enabled: Boolean(latestRunSummaryForSelectedParcel?.run_id),
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  const triagePreview = useMemo(
+    () => buildTriagePreview(selectedParcel, selectedParcelRunQuery.data ?? null),
+    [selectedParcel, selectedParcelRunQuery.data]
+  );
+
+  function abortSelectionRequest() {
+    selectionAbortRef.current?.abort();
+    selectionAbortRef.current = null;
+  }
+
+  function beginSelectionRequest() {
+    abortSelectionRequest();
+    const controller = new AbortController();
+    selectionAbortRef.current = controller;
+    const requestId = selectionRequestIdRef.current + 1;
+    selectionRequestIdRef.current = requestId;
+    return { controller, requestId };
+  }
+
   async function runApnSearch(targetCounty: string, targetApn: string) {
-    setLoading(true);
+    const { controller, requestId } = beginSelectionRequest();
+    setApnSearching(true);
+    setDrawerLoading(true);
     setError(null);
     setLookupMessage(null);
     try {
-      const matches = await searchParcelByApn(targetCounty, targetApn);
+      const matches = await searchParcelByApn(targetCounty, targetApn, { signal: controller.signal });
+      if (selectionRequestIdRef.current !== requestId) return;
       setSelectedParcel(matches[0] ?? null);
       setCandidateParcels(matches);
       setCounty(targetCounty);
@@ -195,18 +206,22 @@ export default function MapPage() {
         });
       }
       if (matches.length > 1) {
-        setLookupMessage("Multiple parcels matched that APN. Review the candidate list and open the right parcel in Studio.");
+        setLookupMessage("Multiple parcels matched that APN. Review the candidate list and add the right parcel to your shortlist.");
       } else if (matches.length === 1) {
-        setLookupMessage("Discovery located a normalized parcel record and framed it for Studio launch.");
+        setLookupMessage("Discovery located a normalized parcel record. Add it to your shortlist to evaluate it in opportunities.");
       }
       if (!matches.length) {
         setError("No parcel found for that county/APN combination.");
       }
     } catch (err) {
+      if (controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Parcel search failed.");
       setCandidateParcels([]);
     } finally {
-      setLoading(false);
+      if (selectionRequestIdRef.current === requestId) {
+        setApnSearching(false);
+        setDrawerLoading(false);
+      }
     }
   }
 
@@ -215,40 +230,49 @@ export default function MapPage() {
   }
 
   async function handleMapClick(lat: number, lng: number) {
-    setLoading(true);
+    const { controller, requestId } = beginSelectionRequest();
+    setDrawerLoading(true);
     setError(null);
     setLookupMessage(null);
     try {
-      const response = await fetchParcelByClick(lng, lat, county);
+      const response = await fetchParcelByClick(lng, lat, county, { signal: controller.signal });
+      if (selectionRequestIdRef.current !== requestId) return;
       setSelectedParcel(response.selected);
       setCandidateParcels(response.candidates);
       setLookupMessage(response.message ?? "Parcel selected from the GIS surface.");
     } catch (err) {
+      if (controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Parcel lookup failed.");
       setCandidateParcels([]);
     } finally {
-      setLoading(false);
+      if (selectionRequestIdRef.current === requestId) {
+        setDrawerLoading(false);
+      }
     }
   }
 
   function handleCountyChange(nextCounty: string) {
+    abortSelectionRequest();
     setCounty(nextCounty);
     setSelectedParcel(null);
     setCandidateParcels([]);
     setHoveredParcelId(null);
-    setLookupMessage(`Switched to ${nextCounty} County. Zoom in to inspect parcel boundaries and launch Studio.`);
+    setLookupMessage(`Switched to ${nextCounty} County. Zoom in to inspect parcel boundaries and shortlist candidates.`);
     setError(null);
+    setApnSearching(false);
+    setDrawerLoading(false);
     setMapView(COUNTY_DEFAULT_VIEWS[nextCounty] ?? DEFAULT_MAP_VIEW);
   }
 
   function handleVisibleParcelClick(parcelId: string) {
     const clicked = visibleParcels.data?.find((parcel) => parcel.id === parcelId);
     if (!clicked) return;
+    abortSelectionRequest();
     setSelectedParcel(clicked);
     setCandidateParcels([clicked]);
     setLookupMessage("Parcel selected directly from the live GIS layer.");
     setError(null);
-    router.push(`/studio/${clicked.id}`);
+    setDrawerLoading(false);
   }
 
   useEffect(() => {
@@ -273,7 +297,7 @@ export default function MapPage() {
               GIS discovery layer
             </div>
             <h1 className="mt-2 text-2xl font-semibold text-slate-100">
-              Browse real parcels, inspect context, and launch Studio
+              Browse real parcels, inspect context, and build a shortlist
             </h1>
           </div>
           <div className="flex min-w-[620px] flex-wrap items-center gap-3 rounded-[24px] border border-slate-800 bg-slate-900/80 p-3">
@@ -297,9 +321,9 @@ export default function MapPage() {
             <button
               className="rounded-2xl bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50"
               onClick={handleApnSearch}
-              disabled={loading || !apnQuery.trim()}
+              disabled={apnSearching || !apnQuery.trim()}
             >
-              {loading ? "Locating..." : "Find parcel"}
+              {apnSearching ? "Locating..." : "Find parcel"}
             </button>
           </div>
         </div>
@@ -307,68 +331,48 @@ export default function MapPage() {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[300px_minmax(0,1fr)_400px]">
         <aside className="border-r border-slate-800 bg-slate-950/88 p-5 xl:overflow-y-auto">
-          <DiscoveryPanel title="Workflow" eyebrow="Locate → inspect → launch">
+          <DiscoveryPanel title="Workflow" eyebrow="Locate → shortlist → evaluate">
             <div className="space-y-3 text-sm leading-7 text-slate-300">
               <p>1. Stay on the GIS surface to inspect real parcel geometry in place.</p>
               <p>2. Search by county + APN or click a visible parcel boundary.</p>
-              <p>3. Review the normalized record, then open the parcel in Studio.</p>
+              <p>3. Add viable parcels to the shortlist, then move into Opportunities to compare and inspect them.</p>
             </div>
           </DiscoveryPanel>
 
-          <DiscoveryPanel title="Opportunity filter" eyebrow="Heuristic screening">
+          <DiscoveryPanel title="Shortlist" eyebrow="Selected candidates">
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/8 px-4 py-3 text-sm text-emerald-100">
+                {shortlist.shortlistIds.length} parcels shortlisted
+              </div>
+              <Link
+                href="/opportunities"
+                className="inline-flex w-full items-center justify-center rounded-[20px] border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold uppercase tracking-[0.2em] text-emerald-200"
+              >
+                Open opportunities
+              </Link>
+              {shortlist.shortlistIds.length ? (
+                <button
+                  className="w-full rounded-[20px] border border-slate-700 px-4 py-3 text-sm font-semibold text-slate-200"
+                  onClick={() => shortlist.clearShortlist()}
+                >
+                  Clear shortlist
+                </button>
+              ) : null}
+            </div>
+          </DiscoveryPanel>
+
+          <DiscoveryPanel title="Live parcel layer" eyebrow="Real GIS only">
             <div className="space-y-4">
               <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm leading-7 text-slate-300">
-                Heuristic only. This first pass uses acreage, address presence, and any available land-use or zoning fields. It does not yet know building footprints or assessor improvement values.
+                This surface shows only live parcel geometry returned from county GIS services. No synthetic parcels, opportunity scores, or demo overlays are used here.
               </div>
-              <label className="block">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">Minimum acreage</div>
-                <input
-                  type="range"
-                  min="0"
-                  max="20"
-                  step="0.5"
-                  value={opportunityFilters.minAcreage}
-                  onChange={(event) =>
-                    setOpportunityFilters((current) => ({
-                      ...current,
-                      minAcreage: Number(event.target.value),
-                    }))
-                  }
-                  className="mt-3 w-full accent-cyan-400"
-                />
-                <div className="mt-2 text-sm text-slate-300">{opportunityFilters.minAcreage.toFixed(1)} acres</div>
-              </label>
-              <ToggleRow
-                label="Likely undeveloped only"
-                description="Uses missing address first, but keeps larger acreage parcels in play as heuristic opportunities."
-                checked={opportunityFilters.likelyUndevelopedOnly}
-                onChange={(checked) =>
-                  setOpportunityFilters((current) => ({ ...current, likelyUndevelopedOnly: checked }))
-                }
-              />
-              <ToggleRow
-                label="Residential-compatible only"
-                description="Only excludes explicit non-residential signals. Missing zoning remains heuristic."
-                checked={opportunityFilters.residentialCompatibleOnly}
-                onChange={(checked) =>
-                  setOpportunityFilters((current) => ({ ...current, residentialCompatibleOnly: checked }))
-                }
-              />
-              <ToggleRow
-                label="Hide tiny developed lots"
-                description="Suppresses addressed sub-1 acre lots that are unlikely first-pass development targets."
-                checked={opportunityFilters.hideTinyDevelopedLots}
-                onChange={(checked) =>
-                  setOpportunityFilters((current) => ({ ...current, hideTinyDevelopedLots: checked }))
-                }
-              />
               <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/8 px-4 py-3 text-sm text-cyan-100">
-                {visibleOpportunityParcels.length} likely candidates in the current viewport
+                {parcelFeatureCount} real parcels in the current viewport
               </div>
             </div>
           </DiscoveryPanel>
 
-          <DiscoveryPanel title="Recent parcels" eyebrow="Ready for Studio">
+          <DiscoveryPanel title="Recent parcels" eyebrow="Recent discovery">
             <div className="space-y-3">
               {(recentParcels.data ?? []).map((parcel) => (
                 <button
@@ -430,39 +434,6 @@ export default function MapPage() {
             </div>
           </DiscoveryPanel>
 
-          <DiscoveryPanel title="Opportunity shortlist" eyebrow="Visible candidates">
-            <div className="space-y-3">
-              {visibleOpportunityParcels.slice(0, 6).map((parcel) => {
-                const assessment = opportunityAssessments.get(parcel.id)!;
-                return (
-                  <button
-                    key={parcel.id}
-                    className="w-full rounded-2xl border border-cyan-400/20 bg-cyan-400/8 px-4 py-3 text-left transition hover:border-cyan-300/50"
-                    onClick={() => {
-                      setSelectedParcel(parcel);
-                      setCandidateParcels([parcel]);
-                      setLookupMessage("Loaded from the visible opportunity shortlist.");
-                    }}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="font-semibold text-slate-100">{parcel.apn ?? parcel.id}</div>
-                      <span className="rounded-full border border-cyan-400/30 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-200">
-                        {opportunityBadgeLabel(assessment)}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-sm text-slate-300">{parcel.areaAcres?.toFixed(2) ?? "—"} acres</div>
-                    <div className="mt-1 text-xs leading-6 text-slate-400">{summarizeOpportunity(assessment)}</div>
-                  </button>
-                );
-              })}
-              {!visibleOpportunityParcels.length ? (
-                <div className="rounded-2xl border border-dashed border-slate-700 px-4 py-6 text-sm text-slate-500">
-                  No parcels in view pass the current heuristic. Relax the filters or pan to a different area.
-                </div>
-              ) : null}
-            </div>
-          </DiscoveryPanel>
-
           {lookupMessage ? (
             <div className="mt-4 rounded-2xl border border-cyan-400/30 bg-cyan-400/10 p-4 text-sm text-cyan-100">
               {lookupMessage}
@@ -496,14 +467,14 @@ export default function MapPage() {
           />
 
           <div className="absolute left-5 top-5 z-[450] rounded-full border border-slate-800 bg-slate-950/85 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-slate-300">
-            {loading ? "Querying parcel source..." : `${county} County active`}
+            {apnSearching ? "Searching APN..." : `${county} County active`}
           </div>
           <div className="absolute left-5 top-20 z-[450] rounded-[22px] border border-slate-900 bg-slate-950/96 px-4 py-3 text-xs uppercase tracking-[0.22em] text-slate-100 shadow-xl shadow-slate-950/60">
             {mapStatus.state === "ready" ? "GIS ready" : "Loading GIS"} • Zoom {viewport?.zoom?.toFixed(1) ?? "—"} •{" "}
             {parcelFeatureCount} parcels visible
           </div>
           <div className="absolute left-5 top-36 z-[450] rounded-[22px] border border-cyan-400/20 bg-slate-950/96 px-4 py-3 text-xs uppercase tracking-[0.22em] text-cyan-100 shadow-xl shadow-slate-950/60">
-            {visibleOpportunityParcels.length} heuristic opportunities highlighted
+            {parcelFeatureCount} real parcels loaded
           </div>
           <div className="absolute right-5 top-5 z-[450] flex items-start gap-3">
             {mapDebug.requestError ? (
@@ -549,8 +520,8 @@ export default function MapPage() {
               Discovery intent
             </div>
             <p className="mt-2 text-sm leading-7 text-slate-300">
-              This surface is for parcel discovery and intake. Select a parcel here, then move into Studio
-              for concept generation and feasibility design.
+              This surface is for parcel discovery and intake. Build a shortlist here, compare opportunities,
+              then inspect the winners in the parcel decision view.
             </p>
           </div>
         </section>
@@ -559,19 +530,60 @@ export default function MapPage() {
           <DiscoveryPanel title={selectedParcel?.apn ?? "No parcel selected"} eyebrow="Parcel drawer">
             <p className="text-sm leading-7 text-slate-300">
               {selectedParcel
-                ? "Review the normalized parcel record, then launch the design workspace in a new tab."
+                ? "Review the normalized parcel record, then add it to the shortlist for comparison and later inspection."
                 : "Click a visible parcel boundary or search by APN to open the parcel drawer."}
             </p>
 
             {selectedParcel ? (
+              <div className="mt-5 rounded-[24px] border border-slate-800 bg-slate-950/70 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
+                      Early triage
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <TriageBadge tone={triagePreview.tone}>{triagePreview.label}</TriageBadge>
+                      {selectedParcelRunQuery.data ? (
+                        <span className="rounded-full border border-slate-700 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">
+                          {selectedParcelRunQuery.data.status.replace(/_/g, " ")}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                  {drawerLoading ? (
+                    <span className="text-xs uppercase tracking-[0.18em] text-cyan-300">Updating preview…</span>
+                  ) : null}
+                </div>
+                <p className="mt-3 text-sm leading-6 text-slate-300">{triagePreview.summary}</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <DetailRow label="Jurisdiction" value={selectedParcel.county} />
+                  <DetailRow label="Area" value={formatArea(selectedParcel)} />
+                  <DetailRow label="Zoning status" value={selectedParcel.zoningCode ?? "Not yet attached"} />
+                  <DetailRow
+                    label="Last run"
+                    value={
+                      latestRunSummaryForSelectedParcel
+                        ? formatTimestamp(latestRunSummaryForSelectedParcel.timestamp)
+                        : "No prior run"
+                    }
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {selectedParcel ? (
               <div className="mt-5 flex flex-col gap-3">
-                <Link
-                  href={`/studio/${selectedParcel.id}`}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  onClick={() => shortlist.toggleShortlist(selectedParcel.id)}
                   className="inline-flex w-full items-center justify-center rounded-[24px] bg-cyan-400 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-300"
                 >
-                  Open in Studio
+                  {shortlist.isShortlisted(selectedParcel.id) ? "Remove from shortlist" : "Add to shortlist"}
+                </button>
+                <Link
+                  href={`/studio/${selectedParcel.id}`}
+                  className="inline-flex w-full items-center justify-center rounded-[24px] border border-slate-700 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-slate-200 transition hover:border-slate-500"
+                >
+                  Open full decision view
                 </Link>
               </div>
             ) : null}
@@ -586,37 +598,12 @@ export default function MapPage() {
               <DetailRow label="Source object ID" value={selectedParcel?.sourceObjectId ?? "—"} />
               <DetailRow label="Zoning" value={selectedParcel?.zoningCode ?? "Enrichment pending"} />
             </div>
-
-            {selectedParcel && selectedOpportunity ? (
-              <div className="mt-5 rounded-[24px] border border-cyan-400/20 bg-cyan-400/8 p-4">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-300">
-                  Opportunity heuristic
-                </div>
-                <div className="mt-2 text-sm font-semibold text-slate-100">{opportunityBadgeLabel(selectedOpportunity)}</div>
-                <p className="mt-2 text-sm leading-7 text-slate-300">{summarizeOpportunity(selectedOpportunity)}</p>
-                <ul className="mt-3 space-y-2 text-sm text-slate-300">
-                  {selectedOpportunity.reasons.map((reason) => (
-                    <li key={reason}>• {reason}</li>
-                  ))}
-                  {selectedOpportunity.warnings.map((warning) => (
-                    <li key={warning} className="text-amber-200">
-                      • {warning}
-                    </li>
-                  ))}
-                  {selectedOpportunity.failedFilters.map((failure) => (
-                    <li key={failure} className="text-red-200">
-                      • {failure}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
           </DiscoveryPanel>
 
-          <DiscoveryPanel title="Studio handoff" eyebrow="Normalized parcel ID">
+          <DiscoveryPanel title="Product flow" eyebrow="Shortlist first">
             <p className="text-sm leading-7 text-slate-300">
-              Studio loads the canonical parcel record by ID and runs the full Bedrock pipeline from
-              parcel through feasibility. Discovery is now only the browsing and selection surface.
+              Discovery feeds shortlist creation. Opportunities is the comparison and ranking surface. The
+              parcel decision view is the inspection surface after comparison narrows the field.
             </p>
           </DiscoveryPanel>
         </aside>
@@ -657,36 +644,104 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ToggleRow({
-  label,
-  description,
-  checked,
-  onChange,
-}: {
-  label: string;
-  description: string;
-  checked: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3">
-      <input
-        type="checkbox"
-        className="mt-1 h-4 w-4 rounded border-slate-600 bg-slate-950 text-cyan-400 focus:ring-cyan-400"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      <div>
-        <div className="text-sm font-semibold text-slate-100">{label}</div>
-        <div className="mt-1 text-xs leading-6 text-slate-400">{description}</div>
-      </div>
-    </label>
-  );
-}
-
 function formatArea(parcel: ParcelRecord | null) {
   if (!parcel) return "—";
   const sqft = parcel.areaSqft ? `${Math.round(parcel.areaSqft).toLocaleString()} sqft` : null;
   const acres = parcel.areaAcres ? `${parcel.areaAcres.toFixed(2)} ac` : null;
   return [acres, sqft].filter(Boolean).join(" • ") || "—";
+}
+
+function formatTimestamp(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function buildTriagePreview(parcel: ParcelRecord | null, run: PipelineRun | null) {
+  if (!parcel) {
+    return {
+      label: "Needs review",
+      tone: "neutral" as const,
+      summary: "Select a parcel to see a lightweight intake signal before deeper evaluation.",
+    };
+  }
+
+  const roi = run?.feasibility_result?.ROI_base ?? run?.feasibility_result?.ROI ?? null;
+  const confidence =
+    run?.feasibility_result?.confidence_score ?? run?.feasibility_result?.confidence ?? null;
+
+  if (!run) {
+    return {
+      label: "Needs review",
+      tone: "neutral" as const,
+      summary: "No prior pipeline run exists for this parcel yet. Use shortlist for later comparison or open the full decision view when you want deeper analysis.",
+    };
+  }
+
+  if (run.status === "near_feasible") {
+    return {
+      label: "Conditional",
+      tone: "warning" as const,
+      summary: run.near_feasible_result?.reason_category
+        ? `Prior run was near feasible. The main blocker was ${run.near_feasible_result.reason_category.replace(/_/g, " ")}.`
+        : "Prior run was near feasible and may warrant follow-up if the constraint can be resolved.",
+    };
+  }
+
+  if (run.status === "failed") {
+    return {
+      label: "Likely no-go",
+      tone: "danger" as const,
+      summary: "The latest saved run failed to produce a decision-grade result for this parcel.",
+    };
+  }
+
+  if (typeof roi === "number" && roi > 0 && typeof confidence === "number" && confidence >= 0.6) {
+    return {
+      label: "Likely candidate",
+      tone: "success" as const,
+      summary: `Latest saved run completed with positive economics at ${Math.round(confidence * 100)}% confidence.`,
+    };
+  }
+
+  if (typeof roi === "number" && roi <= 0) {
+    return {
+      label: "Likely no-go",
+      tone: "danger" as const,
+      summary: "Latest saved run completed, but current economics are negative under the stored assumptions.",
+    };
+  }
+
+  return {
+    label: "Needs review",
+    tone: "neutral" as const,
+    summary: "A prior run exists, but the parcel still needs deeper review before a reliable acquisition call.",
+  };
+}
+
+function TriageBadge({
+  tone,
+  children,
+}: {
+  tone: "success" | "warning" | "danger" | "neutral";
+  children: string;
+}) {
+  const classes =
+    tone === "success"
+      ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
+      : tone === "warning"
+        ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+        : tone === "danger"
+          ? "border-rose-400/40 bg-rose-400/10 text-rose-300"
+          : "border-slate-700 bg-slate-900 text-slate-300";
+  return (
+    <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${classes}`}>
+      {children}
+    </span>
+  );
 }

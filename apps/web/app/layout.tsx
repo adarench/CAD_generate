@@ -7,8 +7,8 @@ import "leaflet/dist/leaflet.css";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
-  title: "Utah Subdivision Studio",
-  description: "Parcel-first land feasibility and concept planning for Utah acquisitions.",
+  title: "Land Feasibility Decision Layer",
+  description: "Discovery, parcel comparison, and decision-grade land feasibility for Utah acquisitions.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -22,10 +22,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <div className="flex items-center gap-3">
                   <div>
                     <div className="text-lg font-semibold text-emerald-300">
-                      Utah Subdivision Studio
+                      Land Feasibility Decision Layer
                     </div>
                     <div className="text-xs uppercase tracking-[0.28em] text-slate-500">
-                      Parcel-driven feasibility
+                      Discovery to decision
                     </div>
                   </div>
                 </div>
@@ -36,8 +36,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                   <Link href="/map" className="transition hover:text-emerald-300">
                     Discovery
                   </Link>
-                  <Link href="/runs" className="transition hover:text-emerald-300">
-                    Runs
+                  <Link href="/opportunities" className="transition hover:text-emerald-300">
+                    Opportunities
                   </Link>
                 </div>
               </nav>

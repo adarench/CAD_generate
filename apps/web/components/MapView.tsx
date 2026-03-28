@@ -472,8 +472,6 @@ function bindSelectedParcelLabel(feature: GeoJSON.Feature, layer: L.Layer) {
 }
 
 function contextStyle(feature: GeoJSON.Feature | undefined, visualMode: MapVisualMode): PathOptions {
-  const opportunityCandidate = Boolean(feature?.properties?.opportunityCandidate);
-  const opportunityTier = String(feature?.properties?.opportunityTier ?? "none");
   if (visualMode === "studio") {
     return {
       color: "#94a3b8",
@@ -481,15 +479,6 @@ function contextStyle(feature: GeoJSON.Feature | undefined, visualMode: MapVisua
       opacity: 0.55,
       fillColor: "#cbd5e1",
       fillOpacity: 0.03,
-    };
-  }
-  if (opportunityCandidate) {
-    return {
-      color: opportunityTier === "high" ? "#f59e0b" : opportunityTier === "medium" ? "#22d3ee" : "#38bdf8",
-      weight: opportunityTier === "high" ? 2.8 : 2.2,
-      opacity: 0.95,
-      fillColor: opportunityTier === "high" ? "#f59e0b" : "#22d3ee",
-      fillOpacity: opportunityTier === "high" ? 0.12 : 0.08,
     };
   }
   return CONTEXT_STYLE;

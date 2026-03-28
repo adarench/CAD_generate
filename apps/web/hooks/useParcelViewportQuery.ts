@@ -35,7 +35,7 @@ export function useParcelViewportQuery(county: string, viewport: ViewportBounds,
       viewport?.zoom,
       resolvedLimit,
     ],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       fetchParcelsInBounds(
         county,
         {
@@ -45,7 +45,8 @@ export function useParcelViewportQuery(county: string, viewport: ViewportBounds,
           maxLat: viewport!.maxLat,
         },
         resolvedLimit,
-        viewport!.zoom
+        viewport!.zoom,
+        { signal }
       ),
     enabled: Boolean(viewport && viewport.zoom >= PARCEL_VIEWPORT_MIN_ZOOM),
     keepPreviousData: true,

@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { fetchRecentParcels, fetchRecentRuns, searchParcelByApn } from "@/lib/api";
-import { DEFAULT_MAP_COUNTY, DEFAULT_STUDIO_DEMO_APN, DEFAULT_STUDIO_DEMO_PARCEL_ID } from "@/lib/mapConfig";
+import { DEFAULT_MAP_COUNTY } from "@/lib/mapConfig";
 import { SUPPORTED_UTAH_COUNTIES } from "@/services/parcels/arcgisParcelClient";
 
 const counties = [...SUPPORTED_UTAH_COUNTIES];
@@ -46,16 +46,14 @@ export default function HomePage() {
       <div className="mx-auto max-w-[1600px]">
         <div className="rounded-[36px] border border-slate-800 bg-slate-900/75 p-10 shadow-2xl shadow-slate-950/50">
           <div className="inline-flex rounded-full border border-cyan-400/30 bg-cyan-400/10 px-4 py-1 text-xs font-semibold uppercase tracking-[0.28em] text-cyan-300">
-            Discovery + Studio
+            Discovery to decision
           </div>
             <h1 className="mt-6 max-w-5xl text-5xl font-semibold leading-tight text-slate-50">
-              A two-surface land feasibility product: parcel discovery on GIS, Bedrock feasibility
-              execution in a dedicated Studio.
+              A land feasibility decision layer for finding, screening, comparing, and inspecting Utah parcels.
             </h1>
           <p className="mt-5 max-w-4xl text-lg leading-8 text-slate-300">
-            Utah Subdivision Studio separates parcel intake from analysis. Use the GIS Discovery layer
-            to find and inspect real parcels, then open a CAD-style Studio workspace for Bedrock-backed
-            layout visualization and feasibility reporting.
+            Use Discovery to inspect real GIS parcels and build a shortlist. Move into Opportunities to rank
+            and compare them. Open the parcel decision view only after comparison narrows the field.
           </p>
           <div className="mt-8 flex flex-wrap gap-4">
             <Link
@@ -65,16 +63,10 @@ export default function HomePage() {
               Open discovery map
             </Link>
             <Link
-              href={`/studio/${DEFAULT_STUDIO_DEMO_PARCEL_ID}`}
-              className="rounded-2xl border border-cyan-400/40 px-6 py-3 text-sm font-semibold uppercase tracking-[0.22em] text-cyan-300 transition hover:border-cyan-300"
+              href="/opportunities"
+              className="rounded-2xl bg-emerald-400 px-6 py-3 text-sm font-semibold uppercase tracking-[0.22em] text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-300"
             >
-              Open Studio demo parcel
-            </Link>
-            <Link
-              href="/runs"
-              className="rounded-2xl border border-slate-700 px-6 py-3 text-sm font-semibold uppercase tracking-[0.22em] text-slate-200 transition hover:border-slate-500"
-            >
-              View saved runs
+              Open opportunities
             </Link>
           </div>
         </div>
@@ -85,7 +77,7 @@ export default function HomePage() {
               <SurfaceCard
                 eyebrow="Surface A"
                 title="GIS Discovery"
-                description="Browse parcel polygons on a live GIS map, search by county + APN, inspect parcel metadata, and launch the selected parcel into Studio."
+                description="Browse parcel polygons on a live GIS map, search by county + APN, inspect parcel metadata, and add viable candidates to a working shortlist."
                 bullets={[
                   "Visible parcel polygons",
                   "County + APN lookup",
@@ -97,29 +89,26 @@ export default function HomePage() {
               />
               <SurfaceCard
                 eyebrow="Surface B"
-                title="Studio Workspace"
-                description="Load a normalized parcel into a CAD-style analysis canvas, run the canonical Bedrock pipeline, and inspect returned layout geometry plus feasibility outputs."
+                title="Opportunities + Parcel decision view"
+                description="Compare shortlisted parcels in a decision table, then inspect the strongest candidates in a parcel decision view backed by the canonical Bedrock pipeline."
                 bullets={[
+                  "Decision comparison",
                   "Canonical pipeline execution",
                   "Layout visualization",
-                  "Feasibility reporting",
-                  "Saved run retrieval",
+                  "Parcel decision memory",
                 ]}
-                href={apnResult ? `/studio/${apnResult}` : `/studio/${DEFAULT_STUDIO_DEMO_PARCEL_ID}`}
-                cta={apnResult ? "Open Studio" : "Open Studio Demo"}
+                href="/opportunities"
+                cta="Open opportunities"
               />
             </div>
 
             <div className="rounded-[30px] border border-slate-800 bg-slate-900/70 p-6">
               <div className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
-                Quick Studio launch
+                Quick parcel locate
               </div>
               <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-400">
-                Use APN lookup to jump directly into the Studio route for a normalized parcel record.
+                Use APN lookup to jump straight into Discovery with the parcel framed and ready to shortlist.
               </p>
-              <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
-                Demo parcel ready: {DEFAULT_STUDIO_DEMO_APN} in Salt Lake County for a Bedrock-backed feasibility run.
-              </div>
               <div className="mt-4 flex flex-wrap gap-3">
                 <select
                   className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-200"
@@ -149,17 +138,17 @@ export default function HomePage() {
               <div className="mt-4 flex flex-wrap gap-3">
                 {apnResult ? (
                   <Link
-                    href={`/studio/${apnResult}`}
+                    href={`/map?county=${encodeURIComponent(county)}&apn=${encodeURIComponent(apn)}`}
                     className="inline-flex rounded-xl border border-cyan-400/40 px-4 py-2 text-sm font-semibold text-cyan-300"
                   >
-                    Open parcel in Studio
+                    Open parcel in discovery
                   </Link>
                 ) : null}
                 <Link
-                  href={`/studio/${DEFAULT_STUDIO_DEMO_PARCEL_ID}`}
+                  href="/map"
                   className="inline-flex rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200"
                 >
-                  Open demo parcel
+                  Open discovery map
                 </Link>
               </div>
               {apnError ? <p className="mt-4 text-sm text-red-300">{apnError}</p> : null}
@@ -169,24 +158,24 @@ export default function HomePage() {
           <div className="grid gap-6">
             <ActivityCard
               title="Recent parcels"
-              subtitle="Normalized parcel records ready for Studio"
+              subtitle="Normalized parcel records ready for shortlist review"
               emptyText="Parcel history will appear after live discovery lookups."
               items={(recentParcels.data ?? []).map((parcel) => ({
                 id: parcel.id,
                 title: parcel.apn ?? parcel.id,
                 detail: `${parcel.county} County • ${parcel.areaAcres?.toFixed(2) ?? "—"} acres`,
-                href: `/studio/${parcel.id}`,
+                href: `/map?county=${encodeURIComponent(parcel.county)}&apn=${encodeURIComponent(parcel.apn ?? "")}`,
               }))}
             />
             <ActivityCard
-              title="Recent runs"
-              subtitle="Saved concept plans and exports"
-              emptyText="Saved runs will appear after Studio generation."
+              title="Decision surface"
+              subtitle="Compare, rank, and inspect saved pipeline output"
+              emptyText="Opportunities will appear after pipeline generation."
               items={(recentRuns.data ?? []).map((run) => ({
                 id: run.run_id,
                 title: `${run.units ?? 0} units • ${formatPercent(run.ROI)}`,
                 detail: `${run.parcel_id ?? "parcel"} • ${formatCurrency(run.projected_profit)}`,
-                href: `/runs/${run.run_id}`,
+                href: "/opportunities",
               }))}
             />
           </div>

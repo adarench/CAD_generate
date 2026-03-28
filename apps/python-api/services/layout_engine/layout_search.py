@@ -382,6 +382,48 @@ def run_layout_search(
             "max_frontage_ft": max(40.0, lot_depth * 1.20),
             "min_area_sqft": min_lot_area_sqft,
         },
+        {
+            "road_width_ft": max(22.0, road_width_ft * 0.84),
+            "lot_depth": max(75.0, lot_depth * 0.82),
+            "min_frontage_ft": max(30.0, min_frontage_ft * 0.85),
+            "max_frontage_ft": max(38.0, min_frontage_ft * 1.05),
+            "min_area_sqft": min_lot_area_sqft,
+        },
+        {
+            "road_width_ft": max(24.0, road_width_ft * 0.88),
+            "lot_depth": min(180.0, lot_depth * 1.18),
+            "min_frontage_ft": max(32.0, min_frontage_ft * 0.88),
+            "max_frontage_ft": max(42.0, min(min_frontage_ft * 1.18, lot_depth * 1.25)),
+            "min_area_sqft": min_lot_area_sqft,
+        },
+        {
+            "road_width_ft": min(44.0, road_width_ft * 1.12),
+            "lot_depth": max(85.0, lot_depth * 0.9),
+            "min_frontage_ft": max(35.0, min_frontage_ft * 0.92),
+            "max_frontage_ft": max(42.0, min_frontage_ft * 1.08),
+            "min_area_sqft": min_lot_area_sqft,
+        },
+        {
+            "road_width_ft": max(20.0, road_width_ft * 0.8),
+            "lot_depth": min(220.0, lot_depth * 1.28),
+            "min_frontage_ft": max(28.0, min_frontage_ft * 0.82),
+            "max_frontage_ft": max(45.0, min(min_frontage_ft * 1.2, lot_depth * 1.3)),
+            "min_area_sqft": min_lot_area_sqft,
+        },
+        {
+            "road_width_ft": max(26.0, road_width_ft * 0.96),
+            "lot_depth": min(240.0, lot_depth * 1.36),
+            "min_frontage_ft": max(30.0, min_frontage_ft * 0.86),
+            "max_frontage_ft": max(48.0, min(lot_depth * 1.32, min_frontage_ft * 1.25)),
+            "min_area_sqft": min_lot_area_sqft,
+        },
+        {
+            "road_width_ft": min(42.0, road_width_ft * 1.08),
+            "lot_depth": max(90.0, lot_depth * 0.96),
+            "min_frontage_ft": max(34.0, min_frontage_ft * 0.8),
+            "max_frontage_ft": max(50.0, min_frontage_ft * 1.3),
+            "min_area_sqft": min_lot_area_sqft,
+        },
     ]
 
     evaluated: List[Tuple[float, RoadNetwork, SubdivisionResult]] = []
