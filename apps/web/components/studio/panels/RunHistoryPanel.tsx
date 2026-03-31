@@ -25,9 +25,9 @@ export function RunHistoryPanel({
               <div>
                 <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Latest recommendation</p>
                 <p className="mt-2 text-base font-semibold text-slate-100">
-                  {memory.latest.decision_label}
+                  {memory.latest.status}
                 </p>
-                <p className="mt-2 text-sm leading-6 text-slate-300">{memory.latest.decision_summary}</p>
+                <p className="mt-2 text-sm leading-6 text-slate-300">Latest saved feasibility result for this parcel.</p>
               </div>
               <StatusPill status={memory.latest.status} />
             </div>
@@ -48,12 +48,12 @@ export function RunHistoryPanel({
             <div className="mt-3 space-y-3 text-sm text-slate-300">
               <div>
                 <span className="text-slate-500">Current:</span>{" "}
-                <span className="font-semibold text-slate-100">{memory.latest.decision_label}</span>
+                <span className="font-semibold text-slate-100">{memory.latest.status}</span>
               </div>
               <div>
                 <span className="text-slate-500">Previous:</span>{" "}
                 <span className="font-semibold text-slate-100">
-                  {memory.previous?.decision_label ?? "No prior recommendation"}
+                  {memory.previous?.status ?? "No prior saved result"}
                 </span>
               </div>
               <p className="leading-6 text-slate-400">{memory.changes.summary ?? "No change summary available."}</p>
@@ -64,7 +64,7 @@ export function RunHistoryPanel({
             <p className="text-xs uppercase tracking-[0.22em] text-slate-500">Status history</p>
             <div className="mt-3 flex flex-wrap gap-2">
               {memory.statusHistory.map((status, index) => (
-                <StatusPill key={`${status}-${index}`} status={status} compact />
+                <PipelineStatusPill key={`${status}-${index}`} status={status} compact />
               ))}
             </div>
           </div>
@@ -102,7 +102,7 @@ function HistoryRunCard({
     >
       <div className="flex items-center justify-between gap-3">
         <span className="font-mono text-slate-100">{run.run_id.slice(0, 8)}</span>
-        <StatusPill status={run.status} />
+        <PipelineStatusPill status={run.status} />
       </div>
       <div className="mt-3 grid grid-cols-3 gap-3 text-xs text-slate-500">
         <Metric label="Updated" value={formatTimestamp(run.timestamp)} />
@@ -126,6 +126,30 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function StatusPill({
+  status,
+  compact = false,
+}: {
+  status: "STRONG" | "MARGINAL" | "PASS" | "NEAR_FEASIBLE";
+  compact?: boolean;
+}) {
+  const tones: Record<string, string> = {
+    STRONG: "border-emerald-400/40 bg-emerald-400/10 text-emerald-300",
+    MARGINAL: "border-amber-400/40 bg-amber-400/10 text-amber-300",
+    PASS: "border-rose-400/40 bg-rose-400/10 text-rose-300",
+    NEAR_FEASIBLE: "border-violet-400/40 bg-violet-400/10 text-violet-300",
+  };
+  const tone = tones[status] ?? tones.PASS;
+  const label = status === "NEAR_FEASIBLE" ? "Near feasible" : status;
+  return (
+    <span
+      className={`inline-flex rounded-full border ${compact ? "px-2 py-1" : "px-3 py-1"} text-[11px] font-semibold uppercase tracking-[0.18em] ${tone}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function PipelineStatusPill({
   status,
   compact = false,
 }: {

@@ -19,6 +19,7 @@ import {
   fetchRun,
   fetchRuns,
   runBedrockLayoutSearch,
+  runBedrockOptimize,
   runBedrockPipeline,
 } from "@/lib/api";
 import type { BasemapMode } from "@/lib/mapConfig";
@@ -113,6 +114,7 @@ export function StudioWorkspace({ parcelId, initialParcel = null }: StudioWorksp
   const [resetNonce, setResetNonce] = useState(0);
   const [activeRun, setActiveRun] = useState<PipelineRun | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [runSuccess, setRunSuccess] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [designTemplate, setDesignTemplate] = useState(DEFAULT_DESIGN_TEMPLATE);
   const [designPrompt, setDesignPrompt] = useState("");
@@ -191,12 +193,44 @@ export function StudioWorkspace({ parcelId, initialParcel = null }: StudioWorksp
     if (!parcel) return;
     setRunning(true);
     setRunError(null);
+    setRunSuccess(null);
     try {
       const run = await runBedrockPipeline(parcel);
       setActiveRun(run);
-      await queryClient.invalidateQueries({ queryKey: ["studio-runs"] });
+      setRunSuccess("Feasibility complete. This parcel is now available on the Opportunities surface.");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["studio-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["opportunities", "runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["runs-memory-index"] }),
+      ]);
     } catch (error) {
       setRunError(error instanceof Error ? error.message : "Pipeline execution failed.");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function handleDeepEvaluate() {
+    if (!parcel) return;
+    setRunning(true);
+    setRunError(null);
+    setRunSuccess(null);
+    try {
+      const optimizationRun = await runBedrockOptimize(parcel);
+      if (optimizationRun.selected_pipeline_run_id) {
+        const run = await fetchRun(optimizationRun.selected_pipeline_run_id);
+        setActiveRun(run);
+      }
+      const rec = optimizationRun.decision?.recommendation ?? "evaluated";
+      setRunSuccess(`Deep evaluation complete. Recommendation: ${rec.replace(/_/g, " ")}. Open the Decision Report for full analysis.`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["studio-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["opportunities", "runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["runs-memory-index"] }),
+        queryClient.invalidateQueries({ queryKey: ["optimization-runs"] }),
+      ]);
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : "Deep evaluation failed.");
     } finally {
       setRunning(false);
     }
@@ -322,9 +356,11 @@ export function StudioWorkspace({ parcelId, initialParcel = null }: StudioWorksp
           designLoading={designing}
           parcelError={parcelQuery.isError ? (parcelQuery.error instanceof Error ? parcelQuery.error.message : "Parcel load failed.") : null}
           runError={runError}
+          runSuccess={runSuccess}
           designError={designError}
           exportError={exportError}
           onRun={() => void handleRun()}
+          onDeepEvaluate={() => void handleDeepEvaluate()}
           onDesign={handleStartDesign}
           formatArea={formatArea}
         />

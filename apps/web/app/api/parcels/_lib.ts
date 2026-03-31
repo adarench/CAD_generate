@@ -33,6 +33,24 @@ const FIELD_NAME_CANDIDATES = {
 
 const countyBySlug = new Map(SUPPORTED_UTAH_COUNTIES.map((county) => [slugifyCounty(county), county]));
 const fieldCache = new Map<string, Promise<string[]>>();
+const DEVELOPMENT_MIN_ACRES = Number(process.env.DEVELOPMENT_MIN_ACRES ?? "2");
+const DEVELOPMENT_MIN_SQFT = DEVELOPMENT_MIN_ACRES * 43_560;
+const LARGE_RESIDENTIAL_EXCEPTION_ACRES = 10;
+const VACANT_LAND_KEYWORDS = ["vacant", "undeveloped", "agric", "pasture", "cropland", "open land", "open space"];
+const RESIDENTIAL_KEYWORDS = [
+  "single family",
+  "residential",
+  "subdivision",
+  "townhome",
+  "townhouse",
+  "condo",
+  "condominium",
+  "duplex",
+  "triplex",
+  "fourplex",
+  "mobile home",
+];
+const HIGH_DENSITY_KEYWORDS = ["apartment", "multifamily", "multi family", "high density", "stacked flats"];
 
 export async function fetchParcelsForBounds(
   county: string,
@@ -50,7 +68,9 @@ export async function fetchParcelsForBounds(
     });
     const parcels = features
       .map((feature) => toParcelRecord(feature, county))
-      .filter((parcel): parcel is ParcelRecord => Boolean(parcel));
+      .filter((parcel): parcel is ParcelRecord => Boolean(parcel))
+      .filter(isDevelopmentScaleParcel)
+      .sort((left, right) => (right.areaSqft ?? 0) - (left.areaSqft ?? 0));
     if (parcels.length) {
       return parcels;
     }
@@ -76,12 +96,20 @@ export async function fetchParcelByClick(
     });
     const candidates = pointHits
       .map((feature) => toParcelRecord(feature, county))
-      .filter((parcel): parcel is ParcelRecord => Boolean(parcel));
+      .filter((parcel): parcel is ParcelRecord => Boolean(parcel))
+      .filter(isDevelopmentScaleParcel);
     if (candidates.length) {
       return {
         selected: candidates[0],
         candidates,
         message: `Selected ${candidates.length} parcel${candidates.length === 1 ? "" : "s"} from the live parcel layer.`,
+      };
+    }
+    if (pointHits.length) {
+      return {
+        selected: null,
+        candidates: [],
+        message: `Showing development-scale parcels only (${DEVELOPMENT_MIN_ACRES}+ acres and excluding likely built-out residential lots).`,
       };
     }
   } catch {
@@ -112,7 +140,9 @@ export async function searchParcelsByApn(county: string, apn: string): Promise<P
       });
       const parcels = features
         .map((feature) => toParcelRecord(feature, county))
-        .filter((parcel): parcel is ParcelRecord => Boolean(parcel));
+        .filter((parcel): parcel is ParcelRecord => Boolean(parcel))
+        .filter(isDevelopmentScaleParcel)
+        .sort((left, right) => (right.areaSqft ?? 0) - (left.areaSqft ?? 0));
       if (parcels.length) return parcels;
     }
   } catch {
@@ -132,7 +162,7 @@ export async function fetchParcelById(id: string): Promise<ParcelRecord | null> 
     });
     const match = features
       .map((feature) => toParcelRecord(feature, parsed.county))
-      .find((parcel): parcel is ParcelRecord => Boolean(parcel));
+      .find((parcel): parcel is ParcelRecord => Boolean(parcel) && isDevelopmentScaleParcel(parcel));
     return match ?? null;
   } catch {
     return null;
@@ -268,4 +298,51 @@ function slugifyCounty(county: string) {
 
 function slugifyValue(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "parcel";
+}
+
+function isDevelopmentScaleParcel(parcel: ParcelRecord) {
+  if ((parcel.areaSqft ?? 0) < DEVELOPMENT_MIN_SQFT) {
+    return false;
+  }
+
+  const landSignals = [parcel.landUse, parcel.zoningCode, extractStringSignals(parcel.rawAttributes)]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (!landSignals) {
+    return true;
+  }
+
+  const looksVacant = VACANT_LAND_KEYWORDS.some((keyword) => landSignals.includes(keyword));
+  const looksHighDensity = HIGH_DENSITY_KEYWORDS.some((keyword) => landSignals.includes(keyword));
+  const looksResidential = RESIDENTIAL_KEYWORDS.some((keyword) => landSignals.includes(keyword));
+  const areaAcres = parcel.areaAcres ?? 0;
+
+  if (looksHighDensity && !looksVacant) {
+    return false;
+  }
+
+  if (looksResidential && !looksVacant && areaAcres < LARGE_RESIDENTIAL_EXCEPTION_ACRES) {
+    return false;
+  }
+
+  return true;
+}
+
+function extractStringSignals(attributes: Record<string, unknown>) {
+  return Object.entries(attributes)
+    .filter(([key, value]) => {
+      if (typeof value !== "string" || !value.trim()) return false;
+      const normalizedKey = key.toLowerCase();
+      return (
+        normalizedKey.includes("land") ||
+        normalizedKey.includes("use") ||
+        normalizedKey.includes("zone") ||
+        normalizedKey.includes("class") ||
+        normalizedKey.includes("desc")
+      );
+    })
+    .map(([, value]) => String(value))
+    .join(" ");
 }

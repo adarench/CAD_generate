@@ -74,7 +74,7 @@ export default function RunPage({ params }: RunProps) {
               href={`/studio/${run.parcel_id}`}
               className="mt-4 inline-flex rounded-2xl border border-cyan-400/40 px-4 py-2 text-sm font-semibold text-cyan-300"
             >
-              Open parcel decision view
+              Open Studio
             </Link>
           ) : null}
         </Panel>
@@ -127,13 +127,13 @@ export default function RunPage({ params }: RunProps) {
           {parcelMemory ? (
             <div className="space-y-3 text-sm text-slate-300">
               <p>
-                Latest recommendation:{" "}
-                <span className="font-semibold text-slate-100">{parcelMemory.latest.decision_label}</span>
+                Latest deal status:{" "}
+                <span className="font-semibold text-slate-100">{parcelMemory.latest.status}</span>
               </p>
               <p>
-                Previous recommendation:{" "}
+                Previous deal status:{" "}
                 <span className="font-semibold text-slate-100">
-                  {parcelMemory.previous?.decision_label ?? "No prior recommendation"}
+                  {parcelMemory.previous?.status ?? "No prior saved result"}
                 </span>
               </p>
               <p>Last updated: {formatTimestamp(parcelMemory.lastUpdatedAt)}</p>

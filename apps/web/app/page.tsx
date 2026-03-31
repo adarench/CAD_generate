@@ -52,8 +52,8 @@ export default function HomePage() {
               A land feasibility decision layer for finding, screening, comparing, and inspecting Utah parcels.
             </h1>
           <p className="mt-5 max-w-4xl text-lg leading-8 text-slate-300">
-            Use Discovery to inspect real GIS parcels and build a shortlist. Move into Opportunities to rank
-            and compare them. Open the parcel decision view only after comparison narrows the field.
+            Use Discovery to find land and build a shortlist. Opportunities is the decision surface for
+            evaluated deals. Studio is the secondary surface for inspecting and refining a single parcel.
           </p>
           <div className="mt-8 flex flex-wrap gap-4">
             <Link
@@ -76,8 +76,8 @@ export default function HomePage() {
             <div className="grid gap-6 lg:grid-cols-2">
               <SurfaceCard
                 eyebrow="Surface A"
-                title="GIS Discovery"
-                description="Browse parcel polygons on a live GIS map, search by county + APN, inspect parcel metadata, and add viable candidates to a working shortlist."
+                title="Discovery"
+                description="Browse parcel polygons on a live GIS map, search by county + APN, inspect parcel metadata, and add parcels to a working shortlist."
                 bullets={[
                   "Visible parcel polygons",
                   "County + APN lookup",
@@ -89,17 +89,26 @@ export default function HomePage() {
               />
               <SurfaceCard
                 eyebrow="Surface B"
-                title="Opportunities + Parcel decision view"
-                description="Compare shortlisted parcels in a decision table, then inspect the strongest candidates in a parcel decision view backed by the canonical Bedrock pipeline."
+                title="Opportunities"
+                description="Review only persisted feasibility results in a deal pipeline table. Rank evaluated parcels, then open Studio for deeper inspection."
                 bullets={[
-                  "Decision comparison",
-                  "Canonical pipeline execution",
-                  "Layout visualization",
-                  "Parcel decision memory",
+                  "Deal pipeline table",
+                  "ROI-first sorting",
+                  "Status classification",
+                  "Studio handoff",
                 ]}
                 href="/opportunities"
                 cta="Open opportunities"
               />
+            </div>
+
+            <div className="rounded-[30px] border border-slate-800 bg-slate-900/70 p-6">
+              <div className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Surface C</div>
+              <h2 className="mt-2 text-2xl font-semibold text-slate-50">Studio</h2>
+              <p className="mt-3 text-sm leading-7 text-slate-300">
+                Studio is not the primary workflow. It is the inspection and iteration surface you open
+                after Opportunities narrows the field to a parcel worth deeper review.
+              </p>
             </div>
 
             <div className="rounded-[30px] border border-slate-800 bg-slate-900/70 p-6">
@@ -168,9 +177,9 @@ export default function HomePage() {
               }))}
             />
             <ActivityCard
-              title="Decision surface"
-              subtitle="Compare, rank, and inspect saved pipeline output"
-              emptyText="Opportunities will appear after pipeline generation."
+              title="Evaluated deals"
+              subtitle="Saved feasibility output ready for the Opportunities surface"
+              emptyText="Evaluated deals will appear after feasibility runs are saved."
               items={(recentRuns.data ?? []).map((run) => ({
                 id: run.run_id,
                 title: `${run.units ?? 0} units • ${formatPercent(run.ROI)}`,

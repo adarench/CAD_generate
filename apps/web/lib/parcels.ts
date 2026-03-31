@@ -204,6 +204,166 @@ export type ConceptInstruction = {
   notes?: string | null;
 };
 
+// --- Optimization pipeline types (mirrors bedrock/contracts/optimization_run.py) ---
+
+export type OptimizationObjective = {
+  roi_weight?: number;
+  profit_weight?: number;
+  risk_weight?: number;
+  confidence_weight?: number;
+  min_roi?: number | null;
+  max_risk?: number | null;
+  improvement_epsilon?: number;
+  target_score?: number;
+};
+
+export type SensitivityBreakpoint = {
+  variable: string;
+  current_value: number | null;
+  break_even_value: number | null;
+  margin_value: number | null;
+  margin_percent: number | null;
+  explanation: string;
+};
+
+export type CandidateSensitivity = {
+  layout_id: string;
+  status: "best_candidate" | "near_feasible" | "failing_candidate";
+  primary_failure_reason: string;
+  margin_to_feasibility: number;
+  make_it_work_statement: string;
+  breakpoints: SensitivityBreakpoint[];
+};
+
+export type EconomicScenario = {
+  scenario_name: string;
+  scenario_type: "land_price_sweep" | "density_curve" | "rezoning";
+  status: "evaluated" | "not_applicable";
+  best_layout_id: string | null;
+  best_roi: number | null;
+  best_projected_profit: number | null;
+  delta_roi: number | null;
+  delta_profit: number | null;
+  recommended_max_offer_price: number | null;
+  curve: Array<Record<string, unknown>>;
+  explanation: string | null;
+};
+
+export type OptimizationDecision = {
+  recommendation: "acquire" | "renegotiate_price" | "pursue_rezoning" | "abandon";
+  action: "acquire" | "renegotiate_price" | "pursue_rezoning" | "abandon" | null;
+  best_layout_id: string | null;
+  expected_roi_base: number | null;
+  expected_roi_best_case: number | null;
+  expected_roi_worst_case: number | null;
+  sensitivity: string[];
+  key_risks: string[];
+  breakpoints: SensitivityBreakpoint[];
+  target_price: number | null;
+  reason: string | null;
+  alternative: string | null;
+  rationale: string | null;
+};
+
+export type OptimizationCandidate = {
+  layout_result: BedrockLayoutResult;
+  feasibility_result: BedrockFeasibilityResult;
+  strategy_parameters: Record<string, unknown>;
+  objective_score: number;
+  optimization_rank: number;
+};
+
+export type OptimizationIteration = {
+  iteration_index: number;
+  candidate_count: number;
+  best_layout_id: string | null;
+  best_objective_score: number | null;
+  best_roi: number | null;
+  best_projected_profit: number | null;
+  improvement_from_prior: number | null;
+};
+
+export type ConvergenceMetrics = {
+  iteration_count: number;
+  plateau_reached: boolean;
+  stopped_reason: string | null;
+  improvement_curve: number[];
+};
+
+export type OptimizationRun = {
+  schema_name: "OptimizationRun";
+  schema_version: string;
+  optimization_run_id: string;
+  parcel_id: string;
+  zoning_result: BedrockZoningRules;
+  layout_candidates: OptimizationCandidate[];
+  best_candidate: OptimizationCandidate | null;
+  ranking_metrics: Record<string, unknown>;
+  objective: OptimizationObjective;
+  iterations: OptimizationIteration[];
+  convergence_metrics: ConvergenceMetrics | null;
+  sensitivity_analysis: CandidateSensitivity[];
+  economic_scenarios: EconomicScenario[];
+  decision: OptimizationDecision | null;
+  selected_pipeline_run_id: string | null;
+  timestamp: string;
+  git_commit: string | null;
+  input_hash: string | null;
+  stage_runtimes: Record<string, number>;
+};
+
+export type OptimizationRunSummary = {
+  optimization_run_id: string;
+  timestamp: string;
+  parcel_id: string | null;
+  candidate_count: number;
+  best_layout_id: string | null;
+  best_roi: number | null;
+  best_projected_profit: number | null;
+  selected_pipeline_run_id: string | null;
+};
+
+// --- Batch optimization types ---
+
+export type BatchOptimizeResultItem = {
+  parcel_id: string;
+  optimization_run_id: string | null;
+  recommendation: string | null;
+  roi: number | null;
+  projected_profit: number | null;
+  units: number | null;
+  status: string;
+  error: string | null;
+};
+
+export type BatchOptimizeResponse = {
+  results: BatchOptimizeResultItem[];
+  total: number;
+  succeeded: number;
+  failed: number;
+};
+
+// --- Decision record types ---
+
+export type DecisionRecord = {
+  schema_name: "DecisionRecord";
+  schema_version: string;
+  decision_id: string;
+  parcel_id: string;
+  optimization_run_id: string | null;
+  pipeline_run_id: string | null;
+  system_recommendation: "acquire" | "renegotiate_price" | "pursue_rezoning" | "abandon" | null;
+  user_action: "acquire" | "pass" | "hold" | "renegotiate" | "rezoning_in_progress" | null;
+  user_action_at: string | null;
+  status: "new" | "in_review" | "decided" | "in_progress" | "closed" | "abandoned";
+  target_price: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+// --- Legacy aliases ---
+
 export type ParcelRecord = DiscoveryParcelRecord;
 export type RunSummary = PipelineRunSummary;
 export type RunDetail = PipelineRun;

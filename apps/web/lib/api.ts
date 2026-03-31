@@ -1,8 +1,13 @@
 import type {
+  BatchOptimizeResponse,
   BedrockLayoutResult,
   BedrockParcel,
   BedrockZoningRules,
+  DecisionRecord,
   DiscoveryParcelRecord,
+  OptimizationObjective,
+  OptimizationRun,
+  OptimizationRunSummary,
   ParcelLookupResponse,
   PipelineRun,
   PipelineRunSummary,
@@ -278,4 +283,102 @@ export async function fetchRecentRuns(limit = 8) {
 
 export async function fetchRun(runId: string) {
   return parseResponse<PipelineRun>(await fetch(`/api/runs/${runId}`));
+}
+
+// --- Optimization pipeline ---
+
+export async function runBedrockOptimize(
+  parcel: BedrockParcel,
+  objective?: Partial<OptimizationObjective>,
+  maxRounds?: number,
+) {
+  return parseResponse<OptimizationRun>(
+    await fetch(`/api/bedrock/pipeline/optimize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        parcel,
+        objective: objective ?? undefined,
+        max_rounds: maxRounds ?? 3,
+      }),
+    })
+  );
+}
+
+export async function runBedrockOptimizeBatch(parcelIds: string[]) {
+  return parseResponse<BatchOptimizeResponse>(
+    await fetch(`/api/bedrock/pipeline/optimize-batch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ parcel_ids: parcelIds }),
+    })
+  );
+}
+
+export async function fetchOptimizationRuns(params?: {
+  limit?: number;
+  offset?: number;
+}) {
+  const query = buildQuery(params ?? {});
+  return parseResponse<OptimizationRunSummary[]>(
+    await fetch(`/api/optimization/runs${query}`)
+  );
+}
+
+export async function fetchOptimizationRun(optimizationRunId: string) {
+  return parseResponse<OptimizationRun>(
+    await fetch(`/api/optimization/runs/${optimizationRunId}`)
+  );
+}
+
+// --- Decision persistence ---
+
+export async function createDecision(input: {
+  parcel_id: string;
+  optimization_run_id?: string | null;
+  pipeline_run_id?: string | null;
+  system_recommendation?: string | null;
+  user_action?: string | null;
+  target_price?: number | null;
+  notes?: string | null;
+}) {
+  return parseResponse<DecisionRecord>(
+    await fetch(`/api/decisions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    })
+  );
+}
+
+export async function fetchDecisions(params?: {
+  parcel_id?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const query = buildQuery(params ?? {});
+  return parseResponse<DecisionRecord[]>(await fetch(`/api/decisions${query}`));
+}
+
+export async function fetchDecision(decisionId: string) {
+  return parseResponse<DecisionRecord>(await fetch(`/api/decisions/${decisionId}`));
+}
+
+export async function updateDecision(
+  decisionId: string,
+  fields: {
+    user_action?: string | null;
+    status?: string | null;
+    target_price?: number | null;
+    notes?: string | null;
+  },
+) {
+  return parseResponse<DecisionRecord>(
+    await fetch(`/api/decisions/${decisionId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(fields),
+    })
+  );
 }

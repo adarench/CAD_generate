@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ClientMapView } from "@/components/ClientMapView";
@@ -10,24 +10,28 @@ import {
   parcelViewportLimitForZoom,
   useParcelViewportQuery,
 } from "@/hooks/useParcelViewportQuery";
-import { fetchParcelByClick, fetchRecentParcels, fetchRun, fetchRuns, searchParcelByApn } from "@/lib/api";
+import {
+  ensureBedrockParcel,
+  fetchParcelByClick,
+  fetchRecentParcels,
+  runBedrockOptimize,
+  runBedrockOptimizeBatch,
+  runBedrockPipeline,
+  searchParcelByApn,
+} from "@/lib/api";
 import { COUNTY_DEFAULT_VIEWS, DEFAULT_MAP_COUNTY, DEFAULT_MAP_VIEW } from "@/lib/mapConfig";
 import { PARCEL_DEBUG_ENABLED } from "@/lib/parcelDebug";
-import type { ParcelRecord, PipelineRun } from "@/lib/parcels";
+import type { ParcelRecord } from "@/lib/parcels";
 import { useShortlist } from "@/lib/shortlist";
 import { SUPPORTED_UTAH_COUNTIES } from "@/services/parcels/arcgisParcelClient";
 
 const counties = [...SUPPORTED_UTAH_COUNTIES];
 
 export default function MapPage() {
+  const queryClient = useQueryClient();
   const recentParcels = useQuery({
     queryKey: ["recent-parcels-map"],
     queryFn: () => fetchRecentParcels(6),
-  });
-  const recentRunSummaries = useQuery({
-    queryKey: ["map-recent-runs"],
-    queryFn: () => fetchRuns({ limit: 120, sort: "timestamp", order: "desc" }),
-    staleTime: 30_000,
   });
   const shortlist = useShortlist();
   const [selectedParcel, setSelectedParcel] = useState<ParcelRecord | null>(null);
@@ -52,6 +56,9 @@ export default function MapPage() {
   const [lookupMessage, setLookupMessage] = useState<string | null>(null);
   const [apnSearching, setApnSearching] = useState(false);
   const [drawerLoading, setDrawerLoading] = useState(false);
+  const [evaluatingParcelId, setEvaluatingParcelId] = useState<string | null>(null);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const [batchResult, setBatchResult] = useState<string | null>(null);
   const selectionAbortRef = useRef<AbortController | null>(null);
   const selectionRequestIdRef = useRef(0);
   const visibleParcels = useParcelViewportQuery(county, viewport);
@@ -153,24 +160,6 @@ export default function MapPage() {
     });
   }, [selectedParcel]);
 
-  const latestRunSummaryForSelectedParcel = useMemo(() => {
-    if (!selectedParcel) return null;
-    return (recentRunSummaries.data ?? []).find((run) => run.parcel_id === selectedParcel.id) ?? null;
-  }, [recentRunSummaries.data, selectedParcel]);
-
-  const selectedParcelRunQuery = useQuery({
-    queryKey: ["map-selected-run", latestRunSummaryForSelectedParcel?.run_id],
-    queryFn: () => fetchRun(latestRunSummaryForSelectedParcel!.run_id),
-    enabled: Boolean(latestRunSummaryForSelectedParcel?.run_id),
-    staleTime: 30_000,
-    retry: false,
-  });
-
-  const triagePreview = useMemo(
-    () => buildTriagePreview(selectedParcel, selectedParcelRunQuery.data ?? null),
-    [selectedParcel, selectedParcelRunQuery.data]
-  );
-
   function abortSelectionRequest() {
     selectionAbortRef.current?.abort();
     selectionAbortRef.current = null;
@@ -248,6 +237,96 @@ export default function MapPage() {
       if (selectionRequestIdRef.current === requestId) {
         setDrawerLoading(false);
       }
+    }
+  }
+
+  function handleShortlistToggle() {
+    if (!selectedParcel) return;
+
+    if (shortlist.isShortlisted(selectedParcel.id)) {
+      shortlist.removeFromShortlist(selectedParcel.id);
+      setLookupMessage("Parcel removed from the shortlist.");
+      return;
+    }
+
+    shortlist.addToShortlist(selectedParcel.id);
+    setLookupMessage("Parcel added to the shortlist. Run feasibility to move it into Opportunities.");
+  }
+
+  async function handleRunFeasibility() {
+    if (!selectedParcel) return;
+    if (!shortlist.isShortlisted(selectedParcel.id)) {
+      shortlist.addToShortlist(selectedParcel.id);
+    }
+
+    setEvaluatingParcelId(selectedParcel.id);
+    setError(null);
+    setLookupMessage("Running feasibility...");
+
+    try {
+      const parcel = await ensureBedrockParcel(selectedParcel.id);
+      await runBedrockPipeline(parcel);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["opportunities", "runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["recent-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["studio-runs"] }),
+      ]);
+      setLookupMessage("Feasibility complete. This parcel now appears in Opportunities.");
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : "Feasibility run failed.");
+      setLookupMessage("Feasibility failed. This parcel will not appear in Opportunities until a run succeeds.");
+    } finally {
+      setEvaluatingParcelId(null);
+    }
+  }
+
+  async function handleDeepEvaluate() {
+    if (!selectedParcel) return;
+    if (!shortlist.isShortlisted(selectedParcel.id)) {
+      shortlist.addToShortlist(selectedParcel.id);
+    }
+
+    setEvaluatingParcelId(selectedParcel.id);
+    setError(null);
+    setLookupMessage("Running deep evaluation (optimization + sensitivity)...");
+
+    try {
+      const parcel = await ensureBedrockParcel(selectedParcel.id);
+      await runBedrockOptimize(parcel);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["opportunities", "runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["recent-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["studio-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["optimization-runs"] }),
+      ]);
+      setLookupMessage("Deep evaluation complete. This parcel now has a full acquisition recommendation in the Decision Report.");
+    } catch (runError) {
+      setError(runError instanceof Error ? runError.message : "Deep evaluation failed.");
+      setLookupMessage("Deep evaluation failed. Try basic feasibility instead.");
+    } finally {
+      setEvaluatingParcelId(null);
+    }
+  }
+
+  async function handleBatchEvaluate() {
+    if (!shortlist.shortlistIds.length || batchRunning) return;
+    setBatchRunning(true);
+    setBatchResult(null);
+    setError(null);
+    setLookupMessage(`Evaluating ${shortlist.shortlistIds.length} shortlisted parcels...`);
+    try {
+      const result = await runBedrockOptimizeBatch(shortlist.shortlistIds);
+      setBatchResult(`Batch complete: ${result.succeeded} succeeded, ${result.failed} failed out of ${result.total}.`);
+      setLookupMessage(`Batch evaluation complete. ${result.succeeded} parcels now have recommendations in Opportunities.`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["opportunities", "runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["optimization-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["recent-runs"] }),
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Batch evaluation failed.");
+    } finally {
+      setBatchRunning(false);
     }
   }
 
@@ -335,7 +414,7 @@ export default function MapPage() {
             <div className="space-y-3 text-sm leading-7 text-slate-300">
               <p>1. Stay on the GIS surface to inspect real parcel geometry in place.</p>
               <p>2. Search by county + APN or click a visible parcel boundary.</p>
-              <p>3. Add viable parcels to the shortlist, then move into Opportunities to compare and inspect them.</p>
+              <p>3. Add parcels to the shortlist to trigger feasibility, then move into Opportunities after the run is saved.</p>
             </div>
           </DiscoveryPanel>
 
@@ -352,6 +431,20 @@ export default function MapPage() {
               </Link>
               {shortlist.shortlistIds.length ? (
                 <button
+                  className="w-full rounded-[20px] border border-violet-400/30 bg-violet-400/10 px-4 py-3 text-sm font-semibold uppercase tracking-[0.2em] text-violet-200 disabled:opacity-50"
+                  onClick={() => void handleBatchEvaluate()}
+                  disabled={batchRunning}
+                >
+                  {batchRunning ? "Evaluating..." : `Deep evaluate all (${shortlist.shortlistIds.length})`}
+                </button>
+              ) : null}
+              {batchResult ? (
+                <div className="rounded-[20px] border border-emerald-400/20 bg-emerald-400/8 px-4 py-3 text-sm text-emerald-100">
+                  {batchResult}
+                </div>
+              ) : null}
+              {shortlist.shortlistIds.length ? (
+                <button
                   className="w-full rounded-[20px] border border-slate-700 px-4 py-3 text-sm font-semibold text-slate-200"
                   onClick={() => shortlist.clearShortlist()}
                 >
@@ -364,7 +457,10 @@ export default function MapPage() {
           <DiscoveryPanel title="Live parcel layer" eyebrow="Real GIS only">
             <div className="space-y-4">
               <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-4 text-sm leading-7 text-slate-300">
-                This surface shows only live parcel geometry returned from county GIS services. No synthetic parcels, opportunity scores, or demo overlays are used here.
+                This surface shows only live parcel geometry returned from county GIS services. It is filtered to development-scale parcels only. No synthetic parcels, opportunity scores, or demo overlays are used here.
+              </div>
+              <div className="rounded-2xl border border-amber-400/20 bg-amber-400/8 px-4 py-3 text-sm text-amber-100">
+                Showing development-scale parcels only
               </div>
               <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/8 px-4 py-3 text-sm text-cyan-100">
                 {parcelFeatureCount} real parcels in the current viewport
@@ -476,6 +572,9 @@ export default function MapPage() {
           <div className="absolute left-5 top-36 z-[450] rounded-[22px] border border-cyan-400/20 bg-slate-950/96 px-4 py-3 text-xs uppercase tracking-[0.22em] text-cyan-100 shadow-xl shadow-slate-950/60">
             {parcelFeatureCount} real parcels loaded
           </div>
+          <div className="absolute left-5 top-52 z-[450] rounded-[22px] border border-amber-400/20 bg-slate-950/96 px-4 py-3 text-xs uppercase tracking-[0.22em] text-amber-100 shadow-xl shadow-slate-950/60">
+            Showing development-scale parcels only
+          </div>
           <div className="absolute right-5 top-5 z-[450] flex items-start gap-3">
             {mapDebug.requestError ? (
               <div className="max-w-xs rounded-[20px] border border-red-500/40 bg-red-500/12 px-4 py-3 text-xs text-red-100 shadow-xl shadow-slate-950/50">
@@ -520,8 +619,8 @@ export default function MapPage() {
               Discovery intent
             </div>
             <p className="mt-2 text-sm leading-7 text-slate-300">
-              This surface is for parcel discovery and intake. Build a shortlist here, compare opportunities,
-              then inspect the winners in the parcel decision view.
+              This surface is for parcel discovery and intake. Build a shortlist here, move evaluated deals
+              into Opportunities, then inspect the winners in Studio.
             </p>
           </div>
         </section>
@@ -530,7 +629,7 @@ export default function MapPage() {
           <DiscoveryPanel title={selectedParcel?.apn ?? "No parcel selected"} eyebrow="Parcel drawer">
             <p className="text-sm leading-7 text-slate-300">
               {selectedParcel
-                ? "Review the normalized parcel record, then add it to the shortlist for comparison and later inspection."
+                ? "Review the normalized parcel record, then add it to the shortlist to trigger feasibility."
                 : "Click a visible parcel boundary or search by APN to open the parcel drawer."}
             </p>
 
@@ -539,34 +638,29 @@ export default function MapPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
-                      Early triage
+                      Intake summary
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <TriageBadge tone={triagePreview.tone}>{triagePreview.label}</TriageBadge>
-                      {selectedParcelRunQuery.data ? (
-                        <span className="rounded-full border border-slate-700 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">
-                          {selectedParcelRunQuery.data.status.replace(/_/g, " ")}
-                        </span>
-                      ) : null}
+                      <span className="rounded-full border border-slate-700 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">
+                        {shortlist.isShortlisted(selectedParcel.id) ? "Shortlisted" : "Not shortlisted"}
+                      </span>
+                      <span className="rounded-full border border-slate-700 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-slate-300">
+                        {evaluatingParcelId === selectedParcel.id ? "Running feasibility" : "Discovery only"}
+                      </span>
                     </div>
                   </div>
                   {drawerLoading ? (
-                    <span className="text-xs uppercase tracking-[0.18em] text-cyan-300">Updating preview…</span>
+                    <span className="text-xs uppercase tracking-[0.18em] text-cyan-300">Updating parcel…</span>
                   ) : null}
                 </div>
-                <p className="mt-3 text-sm leading-6 text-slate-300">{triagePreview.summary}</p>
+                <p className="mt-3 text-sm leading-6 text-slate-300">
+                  Discovery is only for parcel intake. Financial evaluation happens after you add the parcel to the shortlist.
+                </p>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   <DetailRow label="Jurisdiction" value={selectedParcel.county} />
                   <DetailRow label="Area" value={formatArea(selectedParcel)} />
                   <DetailRow label="Zoning status" value={selectedParcel.zoningCode ?? "Not yet attached"} />
-                  <DetailRow
-                    label="Last run"
-                    value={
-                      latestRunSummaryForSelectedParcel
-                        ? formatTimestamp(latestRunSummaryForSelectedParcel.timestamp)
-                        : "No prior run"
-                    }
-                  />
+                  <DetailRow label="Evaluation trigger" value="Shortlist add starts feasibility" />
                 </div>
               </div>
             ) : null}
@@ -574,17 +668,29 @@ export default function MapPage() {
             {selectedParcel ? (
               <div className="mt-5 flex flex-col gap-3">
                 <button
-                  onClick={() => shortlist.toggleShortlist(selectedParcel.id)}
-                  className="inline-flex w-full items-center justify-center rounded-[24px] bg-cyan-400 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-300"
+                  onClick={handleShortlistToggle}
+                  disabled={evaluatingParcelId === selectedParcel.id}
+                  className="inline-flex w-full items-center justify-center rounded-[24px] bg-cyan-400 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-300 disabled:opacity-60"
                 >
                   {shortlist.isShortlisted(selectedParcel.id) ? "Remove from shortlist" : "Add to shortlist"}
                 </button>
-                <Link
-                  href={`/studio/${selectedParcel.id}`}
-                  className="inline-flex w-full items-center justify-center rounded-[24px] border border-slate-700 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-slate-200 transition hover:border-slate-500"
+                <button
+                  onClick={() => void handleRunFeasibility()}
+                  disabled={evaluatingParcelId === selectedParcel.id}
+                  className="inline-flex w-full items-center justify-center rounded-[24px] border border-emerald-400/40 bg-emerald-400/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-emerald-200 transition hover:border-emerald-300 hover:text-emerald-100 disabled:opacity-60"
                 >
-                  Open full decision view
-                </Link>
+                  {evaluatingParcelId === selectedParcel.id ? "Running feasibility…" : "Run feasibility"}
+                </button>
+                <button
+                  onClick={() => void handleDeepEvaluate()}
+                  disabled={evaluatingParcelId === selectedParcel.id}
+                  className="inline-flex w-full items-center justify-center rounded-[24px] border border-violet-400/40 bg-violet-400/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-violet-200 transition hover:border-violet-300 hover:text-violet-100 disabled:opacity-60"
+                >
+                  {evaluatingParcelId === selectedParcel.id ? "Evaluating…" : "Deep evaluate"}
+                </button>
+                <div className="text-xs leading-5 text-slate-500">
+                  Feasibility runs a single pass. Deep evaluate runs multi-round optimization with sensitivity analysis and an acquisition recommendation.
+                </div>
               </div>
             ) : null}
 
@@ -602,8 +708,8 @@ export default function MapPage() {
 
           <DiscoveryPanel title="Product flow" eyebrow="Shortlist first">
             <p className="text-sm leading-7 text-slate-300">
-              Discovery feeds shortlist creation. Opportunities is the comparison and ranking surface. The
-              parcel decision view is the inspection surface after comparison narrows the field.
+              Discovery only collects parcel inputs. Opportunities compares evaluated deals. Studio is the
+              secondary inspection surface after you decide a parcel is worth deeper review.
             </p>
           </DiscoveryPanel>
         </aside>
@@ -649,99 +755,4 @@ function formatArea(parcel: ParcelRecord | null) {
   const sqft = parcel.areaSqft ? `${Math.round(parcel.areaSqft).toLocaleString()} sqft` : null;
   const acres = parcel.areaAcres ? `${parcel.areaAcres.toFixed(2)} ac` : null;
   return [acres, sqft].filter(Boolean).join(" • ") || "—";
-}
-
-function formatTimestamp(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function buildTriagePreview(parcel: ParcelRecord | null, run: PipelineRun | null) {
-  if (!parcel) {
-    return {
-      label: "Needs review",
-      tone: "neutral" as const,
-      summary: "Select a parcel to see a lightweight intake signal before deeper evaluation.",
-    };
-  }
-
-  const roi = run?.feasibility_result?.ROI_base ?? run?.feasibility_result?.ROI ?? null;
-  const confidence =
-    run?.feasibility_result?.confidence_score ?? run?.feasibility_result?.confidence ?? null;
-
-  if (!run) {
-    return {
-      label: "Needs review",
-      tone: "neutral" as const,
-      summary: "No prior pipeline run exists for this parcel yet. Use shortlist for later comparison or open the full decision view when you want deeper analysis.",
-    };
-  }
-
-  if (run.status === "near_feasible") {
-    return {
-      label: "Conditional",
-      tone: "warning" as const,
-      summary: run.near_feasible_result?.reason_category
-        ? `Prior run was near feasible. The main blocker was ${run.near_feasible_result.reason_category.replace(/_/g, " ")}.`
-        : "Prior run was near feasible and may warrant follow-up if the constraint can be resolved.",
-    };
-  }
-
-  if (run.status === "failed") {
-    return {
-      label: "Likely no-go",
-      tone: "danger" as const,
-      summary: "The latest saved run failed to produce a decision-grade result for this parcel.",
-    };
-  }
-
-  if (typeof roi === "number" && roi > 0 && typeof confidence === "number" && confidence >= 0.6) {
-    return {
-      label: "Likely candidate",
-      tone: "success" as const,
-      summary: `Latest saved run completed with positive economics at ${Math.round(confidence * 100)}% confidence.`,
-    };
-  }
-
-  if (typeof roi === "number" && roi <= 0) {
-    return {
-      label: "Likely no-go",
-      tone: "danger" as const,
-      summary: "Latest saved run completed, but current economics are negative under the stored assumptions.",
-    };
-  }
-
-  return {
-    label: "Needs review",
-    tone: "neutral" as const,
-    summary: "A prior run exists, but the parcel still needs deeper review before a reliable acquisition call.",
-  };
-}
-
-function TriageBadge({
-  tone,
-  children,
-}: {
-  tone: "success" | "warning" | "danger" | "neutral";
-  children: string;
-}) {
-  const classes =
-    tone === "success"
-      ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
-      : tone === "warning"
-        ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
-        : tone === "danger"
-          ? "border-rose-400/40 bg-rose-400/10 text-rose-300"
-          : "border-slate-700 bg-slate-900 text-slate-300";
-  return (
-    <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${classes}`}>
-      {children}
-    </span>
-  );
 }

@@ -45,11 +45,11 @@ export function StatusRow({ label, value, mono = false }: { label: string; value
   );
 }
 
-export function Alert({ tone, children }: { tone: "error"; children: React.ReactNode }) {
+export function Alert({ tone, children }: { tone: "error" | "success"; children: React.ReactNode }) {
   const classes =
     tone === "error"
       ? "border-red-500/30 bg-red-500/10 text-red-200"
-      : "border-slate-700 bg-slate-900/80 text-slate-200";
+      : "border-emerald-400/30 bg-emerald-400/10 text-emerald-100";
   return <div className={`mt-4 rounded-[20px] border px-4 py-3 text-sm ${classes}`}>{children}</div>;
 }
 

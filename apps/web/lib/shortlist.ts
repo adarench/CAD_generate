@@ -28,11 +28,52 @@ export function writeShortlistIds(ids: string[]) {
   window.dispatchEvent(new CustomEvent("shortlist:updated", { detail: next }));
 }
 
+function syncAddToServer(parcelId: string) {
+  fetch("/api/shortlist", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ parcel_id: parcelId }),
+  }).catch(() => {});
+}
+
+function syncRemoveFromServer(parcelId: string) {
+  fetch(`/api/shortlist/${parcelId}`, { method: "DELETE" }).catch(() => {});
+}
+
+function syncClearServer() {
+  fetch("/api/shortlist", { method: "DELETE" }).catch(() => {});
+}
+
+async function loadFromServer(): Promise<string[]> {
+  try {
+    const response = await fetch("/api/shortlist");
+    if (!response.ok) return [];
+    const items: Array<{ parcel_id: string }> = await response.json();
+    return items.map((i) => i.parcel_id);
+  } catch {
+    return [];
+  }
+}
+
 export function useShortlist() {
   const [shortlistIds, setShortlistIds] = useState<string[]>([]);
+  const [serverLoaded, setServerLoaded] = useState(false);
 
   useEffect(() => {
-    setShortlistIds(readShortlistIds());
+    const localIds = readShortlistIds();
+    setShortlistIds(localIds);
+
+    loadFromServer().then((serverIds) => {
+      const merged = Array.from(new Set([...localIds, ...serverIds]));
+      if (merged.length !== localIds.length || merged.some((id) => !localIds.includes(id))) {
+        writeShortlistIds(merged);
+        setShortlistIds(merged);
+        for (const id of localIds) {
+          if (!serverIds.includes(id)) syncAddToServer(id);
+        }
+      }
+      setServerLoaded(true);
+    });
 
     function syncFromStorage() {
       setShortlistIds(readShortlistIds());
@@ -59,16 +100,27 @@ export function useShortlist() {
     () => ({
       shortlistIds,
       isShortlisted: (parcelId: string) => shortlistIds.includes(parcelId),
-      addToShortlist: (parcelId: string) => writeShortlistIds([...shortlistIds, parcelId]),
-      removeFromShortlist: (parcelId: string) =>
-        writeShortlistIds(shortlistIds.filter((entry) => entry !== parcelId)),
-      toggleShortlist: (parcelId: string) =>
-        writeShortlistIds(
-          shortlistIds.includes(parcelId)
-            ? shortlistIds.filter((entry) => entry !== parcelId)
-            : [...shortlistIds, parcelId]
-        ),
-      clearShortlist: () => writeShortlistIds([]),
+      addToShortlist: (parcelId: string) => {
+        writeShortlistIds([...shortlistIds, parcelId]);
+        syncAddToServer(parcelId);
+      },
+      removeFromShortlist: (parcelId: string) => {
+        writeShortlistIds(shortlistIds.filter((entry) => entry !== parcelId));
+        syncRemoveFromServer(parcelId);
+      },
+      toggleShortlist: (parcelId: string) => {
+        if (shortlistIds.includes(parcelId)) {
+          writeShortlistIds(shortlistIds.filter((entry) => entry !== parcelId));
+          syncRemoveFromServer(parcelId);
+        } else {
+          writeShortlistIds([...shortlistIds, parcelId]);
+          syncAddToServer(parcelId);
+        }
+      },
+      clearShortlist: () => {
+        writeShortlistIds([]);
+        syncClearServer();
+      },
     }),
     [shortlistIds]
   );

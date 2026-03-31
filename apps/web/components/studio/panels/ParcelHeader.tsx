@@ -13,9 +13,11 @@ export function ParcelHeader({
   designLoading,
   parcelError,
   runError,
+  runSuccess,
   designError,
   exportError,
   onRun,
+  onDeepEvaluate,
   onDesign,
   formatArea,
 }: {
@@ -27,17 +29,19 @@ export function ParcelHeader({
   designLoading: boolean;
   parcelError?: string | null;
   runError?: string | null;
+  runSuccess?: string | null;
   designError?: string | null;
   exportError?: string | null;
   onRun: () => void;
+  onDeepEvaluate: () => void;
   onDesign: () => void;
   formatArea: (parcel: BedrockParcel | null) => string;
 }) {
   return (
-    <WorkspaceSection eyebrow="Parcel decision view" title={title}>
+    <WorkspaceSection eyebrow="Studio" title={title}>
       <p className="max-w-sm text-sm leading-7 text-slate-300">
-        This parcel decision view is wired to the canonical Bedrock pipeline. Parcel load, layout,
-        and feasibility execution happen through Bedrock APIs only.
+        Studio is the inspection and iteration surface for one evaluated parcel. Parcel load, layout,
+        and feasibility execution happen through canonical Bedrock APIs only.
       </p>
       <div className="mt-5 grid grid-cols-2 gap-3">
         <InfoTile label="Jurisdiction" value={parcel?.jurisdiction ?? (parcelLoading ? "Loading..." : "—")} />
@@ -53,12 +57,20 @@ export function ParcelHeader({
         {runLoading ? "Running feasibility..." : "Run Feasibility"}
       </button>
       <button
+        className="mt-3 w-full rounded-[24px] border border-violet-400/40 bg-violet-400/10 px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-violet-200 transition hover:border-violet-300 hover:text-violet-100 disabled:opacity-50"
+        onClick={onDeepEvaluate}
+        disabled={runLoading || parcelLoading || !parcel}
+      >
+        {runLoading ? "Evaluating..." : "Deep Evaluate"}
+      </button>
+      <button
         className="mt-3 w-full rounded-[24px] border border-cyan-400/40 bg-transparent px-5 py-4 text-sm font-semibold uppercase tracking-[0.24em] text-cyan-200 transition hover:border-cyan-300 hover:text-cyan-100 disabled:opacity-50"
         onClick={onDesign}
         disabled={designLoading || parcelLoading || !parcel}
       >
         {designLoading ? "Regenerating layout..." : "Design Layout"}
       </button>
+      {runSuccess ? <Alert tone="success">{runSuccess}</Alert> : null}
       {parcelError ? <Alert tone="error">{parcelError}</Alert> : null}
       {runError ? <Alert tone="error">{runError}</Alert> : null}
       {designError ? <Alert tone="error">{designError}</Alert> : null}

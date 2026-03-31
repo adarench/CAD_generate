@@ -71,21 +71,22 @@ export default function RunsPage() {
                     <div className="flex flex-wrap items-center gap-3">
                       <span className="font-mono text-sm text-slate-300">{memory.parcel_id}</span>
                       <StatusPill status={memory.latest.status} />
-                      <DecisionPill label={memory.latest.decision_label} />
                     </div>
                     <p className="mt-3 text-lg font-semibold text-slate-100">{memory.latest.jurisdiction}</p>
-                    <p className="mt-2 text-sm leading-6 text-slate-400">{memory.latest.decision_summary}</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-400">
+                      Latest saved feasibility result for this parcel.
+                    </p>
                   </div>
                   <div className="grid gap-2 text-sm text-slate-300">
                     <div>
                       <span className="text-slate-500">Last updated:</span> {formatTimestamp(memory.lastUpdatedAt)}
                     </div>
                     <div>
-                      <span className="text-slate-500">Current recommendation:</span> {memory.latest.decision_label}
+                      <span className="text-slate-500">Current deal status:</span> {memory.latest.status}
                     </div>
                     <div>
-                      <span className="text-slate-500">Previous recommendation:</span>{" "}
-                      {memory.previous?.decision_label ?? "No prior recommendation"}
+                      <span className="text-slate-500">Previous deal status:</span>{" "}
+                      {memory.previous?.status ?? "No prior saved result"}
                     </div>
                     <div>
                       <span className="text-slate-500">Saved runs:</span> {memory.runCount}
@@ -94,9 +95,9 @@ export default function RunsPage() {
                 </div>
 
                 <div className="mt-5 grid gap-3 md:grid-cols-3">
-                  <MetricCard label="ROI" value={formatPercent(memory.latest.ROI_base)} />
+                  <MetricCard label="ROI" value={formatPercent(memory.latest.roi)} />
                   <MetricCard label="Projected profit" value={formatCurrency(memory.latest.projected_profit)} />
-                  <MetricCard label="Confidence" value={formatPercent(memory.latest.confidence_score)} />
+                  <MetricCard label="Confidence" value={formatPercent(memory.latest.confidence)} />
                 </div>
 
                 <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/50 px-4 py-3 text-sm text-slate-300">
@@ -106,16 +107,16 @@ export default function RunsPage() {
 
                 <div className="mt-4 flex flex-wrap gap-2">
                   {memory.statusHistory.map((status, index) => (
-                    <StatusPill key={`${memory.parcel_id}-${index}-${status}`} status={status} compact />
+                    <PipelineStatusPill key={`${memory.parcel_id}-${index}-${status}`} status={status} compact />
                   ))}
                 </div>
 
                 <div className="mt-5 flex flex-wrap gap-3">
                   <Link
-                    href={`/studio/${memory.parcel_id}`}
+                    href={`/report/${memory.parcel_id}`}
                     className="inline-flex rounded-2xl border border-cyan-400/40 px-4 py-2 text-sm font-semibold text-cyan-300"
                   >
-                    Inspect parcel
+                    Decision report
                   </Link>
                   <Link
                     href={`/runs/${memory.latest.run_id}`}
@@ -152,19 +153,29 @@ function MetricCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DecisionPill({ label }: { label: "BUY" | "CONDITIONAL" | "PASS" | "PENDING" }) {
-  const tone =
-    label === "BUY"
-      ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300"
-      : label === "CONDITIONAL"
-        ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
-        : label === "PASS"
-          ? "border-rose-400/40 bg-rose-400/10 text-rose-300"
-          : "border-slate-600 bg-slate-800 text-slate-300";
-  return <span className={`inline-flex rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${tone}`}>{label}</span>;
+function StatusPill({
+  status,
+  compact = false,
+}: {
+  status: "STRONG" | "MARGINAL" | "PASS" | "NEAR_FEASIBLE";
+  compact?: boolean;
+}) {
+  const tones: Record<string, string> = {
+    STRONG: "border-emerald-400/40 bg-emerald-400/10 text-emerald-300",
+    MARGINAL: "border-amber-400/40 bg-amber-400/10 text-amber-300",
+    PASS: "border-rose-400/40 bg-rose-400/10 text-rose-300",
+    NEAR_FEASIBLE: "border-violet-400/40 bg-violet-400/10 text-violet-300",
+  };
+  const tone = tones[status] ?? tones.PASS;
+  const label = status === "NEAR_FEASIBLE" ? "Near feasible" : status;
+  return (
+    <span className={`inline-flex rounded-full border ${compact ? "px-2 py-1" : "px-3 py-1"} text-[11px] font-semibold uppercase tracking-[0.18em] ${tone}`}>
+      {label}
+    </span>
+  );
 }
 
-function StatusPill({
+function PipelineStatusPill({
   status,
   compact = false,
 }: {

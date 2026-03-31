@@ -1,11 +1,11 @@
-import type { DecisionRecord } from "@/lib/opportunities";
-import { decisionRecordFromPipelineRun } from "@/lib/opportunities";
+import type { DealRecord } from "@/lib/opportunities";
+import { dealRecordFromPipelineRun } from "@/lib/opportunities";
 import type { PipelineRun } from "@/lib/parcels";
 
 export type ParcelMemory = {
   parcel_id: string;
-  latest: DecisionRecord;
-  previous: DecisionRecord | null;
+  latest: DealRecord;
+  previous: DealRecord | null;
   runCount: number;
   lastUpdatedAt: string;
   statusHistory: Array<PipelineRun["status"]>;
@@ -27,13 +27,14 @@ export function buildParcelMemory(runs: PipelineRun[]): ParcelMemory | null {
 
   const latestRun = sortedRuns[0];
   const previousRun = sortedRuns[1] ?? null;
-  const latest = decisionRecordFromPipelineRun(latestRun);
-  const previous = previousRun ? decisionRecordFromPipelineRun(previousRun) : null;
+  const latest = dealRecordFromPipelineRun(latestRun);
+  const previous = previousRun ? dealRecordFromPipelineRun(previousRun) : null;
+  if (!latest) return null;
 
   const latestUnits = latest.units;
   const previousUnits = previous?.units ?? null;
-  const latestRoi = latest.ROI_base;
-  const previousRoi = previous?.ROI_base ?? null;
+  const latestRoi = latest.roi;
+  const previousRoi = previous?.roi ?? null;
   const latestProfit = latest.projected_profit;
   const previousProfit = previous?.projected_profit ?? null;
 
@@ -69,8 +70,8 @@ export function buildParcelMemory(runs: PipelineRun[]): ParcelMemory | null {
 }
 
 function buildChangeSummary(
-  latest: DecisionRecord,
-  previous: DecisionRecord | null,
+  latest: DealRecord,
+  previous: DealRecord | null,
   unitsDelta: number | null,
   roiDelta: number | null,
   profitDelta: number | null
@@ -78,8 +79,8 @@ function buildChangeSummary(
   if (!previous) return "First recorded decision for this parcel.";
 
   const changes: string[] = [];
-  if (latest.decision_label !== previous.decision_label) {
-    changes.push(`recommendation changed from ${previous.decision_label} to ${latest.decision_label}`);
+  if (latest.status !== previous.status) {
+    changes.push(`status changed from ${previous.status} to ${latest.status}`);
   }
   if (typeof roiDelta === "number" && Math.abs(roiDelta) >= 0.005) {
     changes.push(`ROI ${roiDelta > 0 ? "up" : "down"} ${Math.abs(roiDelta * 100).toFixed(1)} pts`);
