@@ -146,6 +146,7 @@ export type PipelineRun = {
   layout_result?: BedrockLayoutResult | null;
   feasibility_result?: BedrockFeasibilityResult | null;
   near_feasible_result?: NearFeasibleResult | null;
+  inferred_analysis?: InferredAnalysis | null;
   timestamp: string;
   git_commit?: string | null;
   input_hash?: string | null;
@@ -321,6 +322,31 @@ export type OptimizationRunSummary = {
   best_roi: number | null;
   best_projected_profit: number | null;
   selected_pipeline_run_id: string | null;
+};
+
+// --- Inferred analysis types ---
+
+export type InferredAnalysis = {
+  mode: "INFERRED";
+  parcel_id: string;
+  jurisdiction: string;
+  area_acres: number;
+  zoning_assumption: string;
+  density_estimate_du_ac: number;
+  min_lot_size_sqft_estimate: number;
+  estimated_units_low: number;
+  estimated_units_high: number;
+  estimated_units_mid: number;
+  price_per_unit: number;
+  cost_per_unit: number;
+  projected_revenue: number;
+  projected_cost: number;
+  projected_profit: number;
+  roi: number;
+  confidence: number;
+  reasoning_summary: string;
+  key_assumptions: string[];
+  recommendation: "acquire" | "renegotiate_price" | "pursue_rezoning" | "abandon";
 };
 
 // --- Batch optimization types ---

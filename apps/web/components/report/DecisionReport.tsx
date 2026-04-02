@@ -5,6 +5,9 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
 
 import { createDecision, ensureBedrockParcel, fetchDecisions, fetchOptimizationRuns, fetchOptimizationRun, fetchRun, fetchRuns } from "@/lib/api";
+import { ScenarioTable, type ScenarioRow } from "@/components/report/ScenarioTable";
+import { ConstraintExplainer } from "@/components/report/ConstraintExplainer";
+import { WhatIfCalculator } from "@/components/report/WhatIfCalculator";
 import {
   dealRecordFromPipelineRun,
   classifyDealStatus,
@@ -95,6 +98,13 @@ export function DecisionReport({ parcelId }: DecisionReportProps) {
   });
   const existingDecision = (decisionsQuery.data ?? [])[0] ?? null;
 
+  // Inferred analysis is auto-attached to the run by the pipeline when zoning is bypassed or layout fails.
+  const inferredResult = latestRun?.inferred_analysis ?? null;
+  const [userScenarios, setUserScenarios] = useState<ScenarioRow[]>([]);
+
+  const isNearFeasibleWithNoFinancials = latestRun?.status === "near_feasible" && !latestRun?.feasibility_result;
+  const shouldOfferInference = (!latestRun || isNearFeasibleWithNoFinancials) && !inferredResult;
+
   const isLoading =
     parcelQuery.isLoading ||
     runsIndexQuery.isLoading ||
@@ -112,7 +122,7 @@ export function DecisionReport({ parcelId }: DecisionReportProps) {
     );
   }
 
-  if (!latestRun) {
+  if (shouldOfferInference) {
     return (
       <div className="px-6 py-10">
         <div className="mx-auto max-w-[1100px]">
@@ -123,20 +133,14 @@ export function DecisionReport({ parcelId }: DecisionReportProps) {
               This parcel has not been evaluated yet.
             </h2>
             <p className="mt-3 max-w-3xl text-sm leading-7 text-slate-400">
-              Go to Discovery to run feasibility on this parcel. Once a pipeline run completes,
-              the decision report will populate with summary metrics, a recommendation, and next actions.
+              Run feasibility or deep evaluate from Discovery to generate analysis.
+              For parcels without overlay zoning, the system will automatically produce an AI-inferred estimate.
             </p>
             <div className="mt-6 flex gap-3">
-              <Link
-                href="/map"
-                className="rounded-2xl bg-cyan-400 px-5 py-3 text-sm font-semibold uppercase tracking-[0.22em] text-slate-950"
-              >
+              <Link href="/map" className="rounded-2xl bg-cyan-400 px-5 py-3 text-sm font-semibold uppercase tracking-[0.22em] text-slate-950">
                 Open Discovery
               </Link>
-              <Link
-                href="/opportunities"
-                className="rounded-2xl border border-slate-700 px-5 py-3 text-sm font-semibold text-slate-200"
-              >
+              <Link href="/opportunities" className="rounded-2xl border border-slate-700 px-5 py-3 text-sm font-semibold text-slate-200">
                 Back to Opportunities
               </Link>
             </div>
@@ -146,16 +150,68 @@ export function DecisionReport({ parcelId }: DecisionReportProps) {
     );
   }
 
+  // Unified render — both DECISION and INFERRED parcels use the same layout.
+  // The inferred banner appears at the top when applicable.
   return (
     <div className="px-6 py-10">
       <div className="mx-auto max-w-[1100px]">
         <ReportHeader parcelId={parcelId} parcel={parcel} />
+        <CoverageIndicator run={latestRun} inferredResult={inferredResult} />
+
+        {inferredResult && !feasibility ? (
+          <div className="mt-6 rounded-[28px] border border-violet-400/40 bg-violet-400/8 p-6">
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-violet-300">
+                Inferred analysis
+              </div>
+              <span className="rounded-full border border-violet-400/40 bg-violet-400/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-violet-300">
+                AI-estimated · not overlay-backed
+              </span>
+            </div>
+            <h2 className="mt-3 text-xl font-semibold text-violet-100">
+              {inferredResult.recommendation.replace(/_/g, " ")}
+            </h2>
+            <p className="mt-2 text-sm leading-7 text-violet-200/80">
+              {inferredResult.reasoning_summary}
+            </p>
+            <div className="mt-3 text-xs text-amber-300">
+              All metrics below are estimated. Verify with local planning before committing.
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-8 grid gap-6">
+          <DealMemo
+            deal={deal}
+            feasibility={feasibility}
+            run={latestRun}
+            parcel={parcel}
+            optDecision={optDecision}
+          />
           <RecommendationBanner deal={deal} run={latestRun} nearFeasible={nearFeasible} optDecision={optDecision} />
+          <ScenarioTable
+            feasibility={feasibility}
+            optDecision={optDecision}
+            optimizationRun={optimizationRun}
+            inferredAnalysis={inferredResult}
+            userScenarios={userScenarios}
+          />
+          <ConstraintExplainer
+            feasibility={feasibility}
+            zoningResult={latestRun.zoning_result}
+            areaAcres={parcel ? parcel.area_sqft / 43560 : 0}
+            optDecision={optDecision}
+            economicScenarios={optimizationRun?.economic_scenarios ?? []}
+          />
           <SummaryMetrics deal={deal} feasibility={feasibility} run={latestRun} optDecision={optDecision} />
+          <WhatIfCalculator
+            parcelId={parcelId}
+            feasibility={feasibility}
+            inferredAnalysis={inferredResult}
+            onScenarioCreated={(scenario) => setUserScenarios((prev) => [...prev, scenario])}
+          />
           <ConfidenceBreakdown feasibility={feasibility} />
-          <WhySection deal={deal} feasibility={feasibility} run={latestRun} nearFeasible={nearFeasible} optDecision={optDecision} />
+          <AssumptionCard feasibility={feasibility} run={latestRun} />
           <SensitivitySection feasibility={feasibility} optDecision={optDecision} />
           {optDecision?.breakpoints?.length ? <BreakpointSection breakpoints={optDecision.breakpoints} /> : null}
           {optimizationRun?.economic_scenarios?.length ? <EconomicScenariosSection scenarios={optimizationRun.economic_scenarios} /> : null}
@@ -170,9 +226,123 @@ export function DecisionReport({ parcelId }: DecisionReportProps) {
             targetPrice={optDecision?.target_price ?? null}
             existingDecision={existingDecision}
           />
+          <RoutingDebugPanel run={latestRun} inferredResult={inferredResult} />
           <NavigationFooter parcelId={parcelId} run={latestRun} />
         </div>
       </div>
+    </div>
+  );
+}
+
+function CoverageIndicator({ run, inferredResult }: { run: PipelineRun | null; inferredResult: import("@/lib/parcels").InferredAnalysis | null }) {
+  if (!run) return null;
+
+  const bypassed = run.zoning_bypassed;
+  const hasInferred = Boolean(inferredResult || run.inferred_analysis);
+  const hasFeasibility = Boolean(run.feasibility_result?.units);
+
+  if (hasFeasibility && !bypassed) {
+    return (
+      <div className="mt-4 flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/5 px-4 py-2">
+        <span className="h-2 w-2 rounded-full bg-emerald-400" />
+        <span className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">Verified</span>
+        <span className="text-xs text-emerald-200/60">Zoning resolved from authoritative GIS data</span>
+      </div>
+    );
+  }
+
+  if (hasInferred) {
+    return (
+      <div className="mt-4 flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-400/5 px-4 py-2">
+        <span className="h-2 w-2 rounded-full bg-violet-400" />
+        <span className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-300">Inferred</span>
+        <span className="text-xs text-violet-200/60">Zoning estimated — verify before committing</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 flex items-center gap-2 rounded-full border border-rose-400/30 bg-rose-400/5 px-4 py-2">
+      <span className="h-2 w-2 rounded-full bg-rose-400" />
+      <span className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-300">Limited</span>
+      <span className="text-xs text-rose-200/60">Insufficient data for reliable evaluation</span>
+    </div>
+  );
+}
+
+function RoutingDebugPanel({ run, inferredResult }: { run: PipelineRun; inferredResult: import("@/lib/parcels").InferredAnalysis | null }) {
+  const [open, setOpen] = useState(false);
+  const zr = run.zoning_result;
+  const md = (zr as unknown as Record<string, unknown>)?.metadata as Record<string, unknown> | undefined;
+  const ia = inferredResult ?? (run.inferred_analysis as import("@/lib/parcels").InferredAnalysis | null);
+
+  return (
+    <div className="rounded-[28px] border border-slate-800 bg-slate-900/70">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center justify-between px-6 py-4 text-left"
+      >
+        <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">
+          Routing & debug
+        </div>
+        <span className="text-xs text-slate-500">{open ? "▲" : "▼"}</span>
+      </button>
+      {open ? (
+        <div className="border-t border-slate-800 px-6 pb-6 pt-4 space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <DebugField label="Decision path" value={run.zoning_bypassed ? "INFERRED" : "VERIFIED"} />
+            <DebugField label="Reason" value={run.zoning_bypassed ? (run.bypass_reason?.replace(/_/g, " ") ?? "Zoning bypass") : "Overlay match found"} />
+            <DebugField label="Jurisdiction" value={zr?.jurisdiction ?? "Unknown"} />
+            <DebugField label="Zoning district" value={zr?.district ?? "Unknown"} />
+            <DebugField label="Source type" value={String(md?.source_type ?? "unknown")} />
+            <DebugField label="Legal reliability" value={String(md?.legal_reliability ?? "unknown")} />
+            <DebugField label="Rule completeness" value={typeof md?.rule_completeness === "number" ? `${(md.rule_completeness as number * 100).toFixed(0)}%` : "unknown"} />
+            <DebugField label="Pipeline status" value={run.status} />
+          </div>
+
+          {zr ? (
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-600 mb-2">Constraint inputs</div>
+              <div className="grid gap-2 sm:grid-cols-3 text-sm">
+                <DebugField label="Min lot size" value={zr.min_lot_size_sqft ? `${zr.min_lot_size_sqft.toLocaleString()} sqft` : "—"} />
+                <DebugField label="Max density" value={zr.max_units_per_acre ? `${zr.max_units_per_acre} du/ac` : "—"} />
+                <DebugField label="Setbacks" value={zr.setbacks ? `F${zr.setbacks.front ?? "?"}/S${zr.setbacks.side ?? "?"}/R${zr.setbacks.rear ?? "?"}` : "—"} />
+              </div>
+            </div>
+          ) : null}
+
+          {ia ? (
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-slate-600 mb-2">Inference details</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <DebugField label="Confidence" value={`${Math.round(ia.confidence * 100)}%`} />
+                <DebugField label="Zoning assumption" value={ia.zoning_assumption} />
+              </div>
+              <div className="mt-2 text-xs text-slate-400">{ia.reasoning_summary}</div>
+              {ia.key_assumptions?.length ? (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {ia.key_assumptions.map((a, i) => (
+                    <span key={i} className="rounded border border-slate-700 px-2 py-0.5 text-[10px] text-slate-400">{a}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="text-[10px] text-slate-600">
+            Run ID: {run.run_id} · {run.timestamp}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DebugField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/50 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-[0.2em] text-slate-600">{label}</div>
+      <div className="mt-0.5 text-xs text-slate-300">{value}</div>
     </div>
   );
 }
@@ -200,6 +370,132 @@ function ReportHeader({ parcelId, parcel }: { parcelId: string; parcel: BedrockP
         >
           Back to Opportunities
         </Link>
+      </div>
+    </div>
+  );
+}
+
+function DealMemo({
+  deal,
+  feasibility,
+  run,
+  parcel,
+  optDecision,
+}: {
+  deal: DealRecord | null;
+  feasibility: BedrockFeasibilityResult | null;
+  run: PipelineRun;
+  parcel: BedrockParcel | null;
+  optDecision: OptimizationDecision | null;
+}) {
+  if (!deal && !feasibility) return null;
+
+  const fs = feasibility?.financial_summary as Record<string, unknown> | undefined;
+  const mc = fs?.market_context as Record<string, unknown> | undefined;
+  const jurisdiction = parcel?.jurisdiction ?? "Unknown";
+  const acres = parcel ? (parcel.area_sqft / 43560).toFixed(1) : "?";
+  const district = run.zoning_result?.district ?? "Unknown";
+  const units = feasibility?.units ?? deal?.units ?? 0;
+  const homePrice = feasibility?.estimated_home_price ?? 0;
+  const costPerHome = feasibility?.construction_cost_per_home ?? 0;
+  const revenue = feasibility?.projected_revenue ?? 0;
+  const cost = feasibility?.projected_cost ?? 0;
+  const profit = feasibility?.projected_profit ?? 0;
+  const roi = feasibility?.ROI_base ?? feasibility?.ROI ?? deal?.roi;
+  const confidence = feasibility?.confidence_score ?? feasibility?.confidence ?? 0;
+  const median = (mc?.median_home_value as number) ?? null;
+  const usedCountyFallback = Boolean(mc?.used_county_fallback);
+  const rec = optDecision?.recommendation?.replace(/_/g, " ") ?? null;
+
+  const roiStr = typeof roi === "number" ? `${(roi * 100).toFixed(1)}%` : "N/A";
+  const revenueSource = usedCountyFallback ? "county-level Census fallback" : "jurisdiction-specific Census ACS 2024";
+  const calSource = mc?.calibration_source as string | undefined;
+  const pricingProxy = mc?.pricing_proxy as string | undefined;
+  const evalGrade = (fs?.evaluation_grade as string) ?? null;
+  const zoningRules = run.zoning_result;
+  const minLot = zoningRules?.min_lot_size_sqft;
+  const maxDensity = zoningRules?.max_units_per_acre;
+  const acresNum = parcel ? parcel.area_sqft / 43560 : 0;
+  const theoreticalMax = maxDensity && acresNum ? Math.floor(acresNum * maxDensity) : null;
+
+  const gradeTone = evalGrade === "DECISION_GRADE"
+    ? "border-emerald-400/30 bg-emerald-400/5"
+    : evalGrade === "EXPLORATORY"
+      ? "border-amber-400/30 bg-amber-400/5"
+      : "border-slate-700 bg-slate-900/50";
+
+  const gradeLabel = evalGrade === "DECISION_GRADE"
+    ? "Decision-grade — real zoning + calibrated assumptions"
+    : evalGrade === "EXPLORATORY"
+      ? "Exploratory — estimated data, verify before committing"
+      : evalGrade === "BLOCKED"
+        ? "Blocked — insufficient data for reliable evaluation"
+        : null;
+
+  return (
+    <div className={`rounded-[28px] border p-6 ${gradeTone}`}>
+      <div className="flex items-center justify-between">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">
+          Deal memo
+        </div>
+        {gradeLabel ? (
+          <span className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${
+            evalGrade === "DECISION_GRADE" ? "text-emerald-300" : evalGrade === "EXPLORATORY" ? "text-amber-300" : "text-slate-500"
+          }`}>
+            {gradeLabel}
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
+        <p>
+          <strong className="text-slate-100">{units}-unit subdivision</strong> in {jurisdiction} on {acres} acres
+          zoned <strong className="text-slate-100">{district}</strong>.
+          {" "}Projected profit of <strong className="text-slate-100">{formatCurrency(profit)}</strong> at{" "}
+          <strong className="text-slate-100">{roiStr} ROI</strong> with {Math.round(confidence * 100)}% confidence.
+          {rec ? <> System recommendation: <strong className="text-slate-100">{rec}</strong>.</> : null}
+        </p>
+
+        {minLot || maxDensity ? (
+          <p>
+            <strong className="text-slate-200">Key constraints:</strong>{" "}
+            {minLot ? `Minimum lot size ${minLot.toLocaleString()} sqft. ` : ""}
+            {maxDensity ? `Maximum density ${maxDensity} units/acre. ` : ""}
+            {theoreticalMax ? `Theoretical maximum ~${theoreticalMax} units on ${acres} acres. ` : ""}
+            {units > 0 && theoreticalMax ? `Layout engine produced ${units} buildable lots after roads, setbacks, and infrastructure.` : ""}
+          </p>
+        ) : null}
+
+        <p>
+          Revenue assumes {units} homes at {formatCurrency(homePrice)} each
+          {pricingProxy?.startsWith("internal") ? " (from internal closed-deal data)" : `, based on ${revenueSource} data`}
+          {median ? ` (median ${formatCurrency(median)})` : ""}.
+          {" "}Construction estimated at {formatCurrency(costPerHome)}/home
+          {calSource?.includes("internal") ? " (calibrated from actual builder margins)" : " using regional cost proxy"}.
+          {" "}Total cost including land, infrastructure, and soft costs: {formatCurrency(cost)}.
+        </p>
+
+        {profit > 0 && typeof roi === "number" ? (
+          <p className="text-emerald-200">
+            <strong>Why this works:</strong> At {formatCurrency(homePrice)}/home and {formatCurrency(costPerHome)} total cost,
+            the margin of {formatCurrency(homePrice - costPerHome)}/unit supports {roiStr} ROI across {units} units.
+          </p>
+        ) : profit <= 0 ? (
+          <p className="text-rose-200">
+            <strong>Why this doesn{"'"}t work:</strong> Total cost ({formatCurrency(cost)}) exceeds revenue ({formatCurrency(revenue)}).
+            {units <= 2 ? " The parcel produces too few units to absorb fixed costs (land, infrastructure)." : ""}
+            {costPerHome > homePrice ? " Construction cost per home exceeds the projected sale price." : ""}
+          </p>
+        ) : null}
+
+        {run.zoning_bypassed ? (
+          <p className="text-amber-300">
+            Zoning uses fallback rules — not backed by a real GIS overlay. Layout and density assumptions may not reflect actual entitlements.
+          </p>
+        ) : null}
+        <p className="text-xs text-slate-500">
+          {calSource?.includes("internal") ? "Revenue and cost calibrated from Flagship Homes closed deals." : "Construction costs use regional proxy data."}{" "}
+          This memo is for screening purposes.
+        </p>
       </div>
     </div>
   );
@@ -339,6 +635,126 @@ function ConfidenceBreakdown({ feasibility }: { feasibility: BedrockFeasibilityR
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+function AssumptionCard({
+  feasibility,
+  run,
+}: {
+  feasibility: BedrockFeasibilityResult | null;
+  run: PipelineRun;
+}) {
+  const fs = feasibility?.financial_summary as Record<string, unknown> | undefined;
+  const mc = fs?.market_context as Record<string, unknown> | undefined;
+  const assumptions = feasibility?.assumptions as Record<string, unknown> | undefined;
+  const devBreakdown = fs?.development_cost_breakdown as Record<string, number> | undefined;
+
+  if (!mc) return null;
+
+  const jurisdiction = mc.jurisdiction as string | undefined;
+  const median = mc.median_home_value as number | undefined;
+  const pricingProxy = mc.pricing_proxy as string | undefined;
+  const costProxy = mc.cost_proxy as string | undefined;
+  const usedCountyFallback = Boolean(mc.used_county_fallback);
+  const costPerSqft = mc.construction_cost_per_sqft as number | undefined;
+  const rpp = mc.rpp_all_items as number | undefined;
+  const landShare = mc.land_value_share_of_home_value as number | undefined;
+  const homeSize = mc.estimated_home_size_sqft as number | undefined;
+
+  const zoningBypassed = run.zoning_bypassed;
+  const zoningDistrict = run.zoning_result?.district;
+
+  type QualityLevel = "strong" | "moderate" | "weak";
+  const revenueQuality: QualityLevel = usedCountyFallback ? "moderate" : median ? "strong" : "weak";
+  const zoningQuality: QualityLevel = zoningBypassed ? "weak" : "strong";
+  const costQuality: QualityLevel = "moderate";
+
+  const qualityColors: Record<QualityLevel, string> = {
+    strong: "border-emerald-400/30 bg-emerald-400/8 text-emerald-200",
+    moderate: "border-amber-400/30 bg-amber-400/8 text-amber-200",
+    weak: "border-rose-400/30 bg-rose-400/8 text-rose-200",
+  };
+  const qualityLabels: Record<QualityLevel, string> = {
+    strong: "Jurisdiction-specific",
+    moderate: "Regional proxy",
+    weak: "Default / fallback",
+  };
+
+  return (
+    <div className="rounded-[28px] border border-slate-800 bg-slate-900/70 p-6">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">
+        How these numbers were computed
+      </div>
+      <div className="mt-4 space-y-3">
+        <div className="rounded-[20px] border border-slate-800 bg-slate-950/70 px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Revenue basis</div>
+            <span className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${qualityColors[revenueQuality]}`}>
+              {qualityLabels[revenueQuality]}
+            </span>
+          </div>
+          <div className="mt-2 text-sm text-slate-200">
+            {median ? `Median home value for ${jurisdiction}: ${formatCurrency(median)}` : "Default pricing ($480,000)"}
+          </div>
+          {usedCountyFallback ? (
+            <div className="mt-1 text-xs text-amber-300">County-level fallback — no jurisdiction-specific data</div>
+          ) : null}
+          <div className="mt-1 text-xs text-slate-500">Source: {pricingProxy?.replace(/_/g, " ") ?? "unknown"}</div>
+        </div>
+
+        <div className="rounded-[20px] border border-slate-800 bg-slate-950/70 px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Cost basis</div>
+            <span className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${qualityColors[costQuality]}`}>
+              {qualityLabels[costQuality]}
+            </span>
+          </div>
+          <div className="mt-2 text-sm text-slate-200">
+            {costPerSqft ? `$${costPerSqft.toFixed(0)}/sqft × ${homeSize?.toLocaleString() ?? "2,000"} sqft reference home` : "National baseline"}
+            {rpp ? ` (RPP ${rpp.toFixed(1)})` : ""}
+          </div>
+          <div className="mt-1 text-xs text-slate-500">Source: {costProxy?.replace(/_/g, " ") ?? "national baseline"}</div>
+        </div>
+
+        <div className="rounded-[20px] border border-slate-800 bg-slate-950/70 px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Zoning basis</div>
+            <span className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${qualityColors[zoningQuality]}`}>
+              {qualityLabels[zoningQuality]}
+            </span>
+          </div>
+          <div className="mt-2 text-sm text-slate-200">
+            District: {zoningDistrict ?? "Unknown"}
+            {zoningBypassed ? " (exploratory — not overlay-backed)" : " (real overlay)"}
+          </div>
+        </div>
+
+        <div className="rounded-[20px] border border-slate-800 bg-slate-950/70 px-4 py-3">
+          <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Land basis</div>
+          <div className="mt-2 text-sm text-slate-200">
+            {landShare ? `${(landShare * 100).toFixed(0)}% of home value × parcel acreage` : "18% of home value × acreage"}
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            This is a proxy. Actual land acquisition price may vary significantly.
+          </div>
+        </div>
+
+        {devBreakdown ? (
+          <div className="rounded-[20px] border border-slate-800 bg-slate-950/70 px-4 py-3">
+            <div className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Development cost breakdown</div>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+              {Object.entries(devBreakdown).map(([key, val]) => (
+                <div key={key}>
+                  <span className="text-slate-500">{key}:</span>{" "}
+                  <span className="text-slate-200">{formatCurrency(val)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );

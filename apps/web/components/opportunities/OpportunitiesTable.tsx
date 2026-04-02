@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import type { DealRecord, DealStatus } from "@/lib/opportunities";
+import type { DealRecord, DealStatus, SourceMode } from "@/lib/opportunities";
 import type { DecisionRecord } from "@/lib/parcels";
 
 export type OpportunityRow = DealRecord;
@@ -110,6 +110,7 @@ export function OpportunitiesTable({
           <thead>
             <tr className="text-left text-xs uppercase tracking-[0.24em] text-slate-500">
               <th className="px-4 py-2">Parcel ID</th>
+              <th className="px-4 py-2">Source</th>
               <th className="px-4 py-2">Jurisdiction</th>
               <th className="px-4 py-2">Units</th>
               <th className="px-4 py-2">Projected Profit</th>
@@ -132,10 +133,16 @@ export function OpportunitiesTable({
                     Run {formatTimestamp(row.last_run_at)}
                   </div>
                 </td>
+                <td className="px-4 py-4 align-top">
+                  <SourceBadge mode={row.source_mode} />
+                </td>
                 <td className="px-4 py-4 align-top">{row.jurisdiction}</td>
                 <td className="px-4 py-4 align-top">{formatInteger(row.units)}</td>
                 <td className="px-4 py-4 align-top">{formatCurrency(row.projected_profit)}</td>
-                <td className="px-4 py-4 align-top">{formatPercent(row.roi)}</td>
+                <td className="px-4 py-4 align-top">
+                  {formatPercent(row.roi)}
+                  {row.source_mode === "inferred" ? <span className="ml-1 text-[10px] text-violet-300">(est.)</span> : null}
+                </td>
                 <td className="px-4 py-4 align-top">{formatConfidence(row.confidence)}</td>
                 <td className="px-4 py-4 align-top">
                   <div className="flex flex-col gap-2">
@@ -254,6 +261,21 @@ function formatTimestamp(value: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+function SourceBadge({ mode }: { mode: SourceMode }) {
+  if (mode === "verified") {
+    return (
+      <span className="inline-flex rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
+        Verified
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex rounded-full border border-violet-400/40 bg-violet-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-violet-300">
+      Inferred
+    </span>
+  );
 }
 
 function DecisionCell({ decision }: { decision: DecisionRecord | null }) {

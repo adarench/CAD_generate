@@ -1,4 +1,5 @@
 import type {
+  InferredAnalysis,
   BatchOptimizeResponse,
   BedrockLayoutResult,
   BedrockParcel,
@@ -283,6 +284,18 @@ export async function fetchRecentRuns(limit = 8) {
 
 export async function fetchRun(runId: string) {
   return parseResponse<PipelineRun>(await fetch(`/api/runs/${runId}`));
+}
+
+// --- Inferred analysis ---
+
+export async function runInferredAnalysis(parcelId: string) {
+  return parseResponse<InferredAnalysis>(
+    await fetch(`/api/bedrock/pipeline/infer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ parcel_id: parcelId }),
+    })
+  );
 }
 
 // --- Optimization pipeline ---
