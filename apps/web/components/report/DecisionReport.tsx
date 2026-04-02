@@ -8,6 +8,7 @@ import { createDecision, ensureBedrockParcel, fetchDecisions, fetchOptimizationR
 import { ScenarioTable, type ScenarioRow } from "@/components/report/ScenarioTable";
 import { ConstraintExplainer } from "@/components/report/ConstraintExplainer";
 import { WhatIfCalculator } from "@/components/report/WhatIfCalculator";
+import { DealSolver } from "@/components/report/DealSolver";
 import {
   dealRecordFromPipelineRun,
   classifyDealStatus,
@@ -209,6 +210,11 @@ export function DecisionReport({ parcelId }: DecisionReportProps) {
             feasibility={feasibility}
             inferredAnalysis={inferredResult}
             onScenarioCreated={(scenario) => setUserScenarios((prev) => [...prev, scenario])}
+          />
+          <DealSolver
+            feasibility={feasibility}
+            layoutResult={latestRun?.layout_result ?? null}
+            parcelAreaSqft={parcel?.area_sqft ?? null}
           />
           <ConfidenceBreakdown feasibility={feasibility} />
           <AssumptionCard feasibility={feasibility} run={latestRun} />

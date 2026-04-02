@@ -64,7 +64,6 @@ export function WhatIfCalculator({
         body: JSON.stringify({
           parcel,
           market_context: marketContext,
-          max_candidates: 12,
         }),
       });
 

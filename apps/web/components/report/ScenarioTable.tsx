@@ -38,18 +38,21 @@ export function ScenarioTable({
   const mc = fs?.market_context as Record<string, unknown> | undefined;
   const baseLand = (mc?.land_price_estimate as number) ?? null;
 
-  if (baseUnits || baseRoi !== null) {
-    rows.push({
-      name: "Base case",
-      homePrice: basePrice,
-      costPerHome: baseCost,
-      landBasis: baseLand,
-      units: baseUnits,
-      roi: baseRoi,
-      profit: baseProfit,
-      source: "base",
-    });
-  }
+  const baseRow: ScenarioRow | null =
+    baseUnits || baseRoi !== null
+      ? {
+          name: "Base case",
+          homePrice: basePrice,
+          costPerHome: baseCost,
+          landBasis: baseLand,
+          units: baseUnits,
+          roi: baseRoi,
+          profit: baseProfit,
+          source: "base",
+        }
+      : null;
+
+  if (baseRow) rows.push(baseRow);
 
   // Conservative (worst case)
   const worstRoi = feasibility?.ROI_worst_case ?? (optDecision?.expected_roi_worst_case);
@@ -130,32 +133,129 @@ export function ScenarioTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
-              <tr
-                key={`${row.name}-${i}`}
-                className={`border-t border-slate-800 ${row.source === "base" ? "bg-slate-950/50" : ""}`}
-              >
-                <td className={`px-3 py-3 font-semibold ${sourceTones[row.source] ?? "text-slate-300"}`}>
-                  {row.name}
-                  {row.source === "user_override" ? (
-                    <span className="ml-1 text-[9px] uppercase text-amber-400/60">custom</span>
-                  ) : row.source === "sensitivity" ? (
-                    <span className="ml-1 text-[9px] uppercase text-cyan-400/60">pre-computed</span>
-                  ) : null}
-                </td>
-                <td className="px-3 py-3 text-slate-300">{fmtCurrency(row.homePrice)}</td>
-                <td className="px-3 py-3 text-slate-300">{fmtCurrency(row.costPerHome)}</td>
-                <td className="px-3 py-3 text-slate-300">{row.units?.toLocaleString() ?? "—"}</td>
-                <td className={`px-3 py-3 font-semibold ${roiColor(row.roi)}`}>{fmtPercent(row.roi)}</td>
-                <td className="px-3 py-3 text-slate-300">{fmtCurrency(row.profit)}</td>
-              </tr>
-            ))}
+            {rows.map((row, i) => {
+              const isBase = row.source === "base";
+              return (
+                <tr
+                  key={`${row.name}-${i}`}
+                  className={`border-t border-slate-800 ${isBase ? "bg-slate-950/50" : ""}`}
+                >
+                  <td className={`px-3 py-3 font-semibold ${sourceTones[row.source] ?? "text-slate-300"}`}>
+                    {row.name}
+                    {row.source === "user_override" ? (
+                      <span className="ml-1 text-[9px] uppercase text-amber-400/60">custom</span>
+                    ) : row.source === "sensitivity" ? (
+                      <span className="ml-1 text-[9px] uppercase text-cyan-400/60">pre-computed</span>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-3 text-slate-300">
+                    {fmtCurrency(row.homePrice)}
+                    {!isBase && <DeltaCurrency value={row.homePrice} base={baseRow?.homePrice} />}
+                  </td>
+                  <td className="px-3 py-3 text-slate-300">
+                    {fmtCurrency(row.costPerHome)}
+                    {!isBase && <DeltaCurrency value={row.costPerHome} base={baseRow?.costPerHome} invertColor />}
+                  </td>
+                  <td className="px-3 py-3 text-slate-300">
+                    {row.units?.toLocaleString() ?? "—"}
+                    {!isBase && <DeltaInteger value={row.units} base={baseRow?.units} />}
+                  </td>
+                  <td className={`px-3 py-3 font-semibold ${roiColor(row.roi)}`}>
+                    {fmtPercent(row.roi)}
+                    {!isBase && <DeltaPercent value={row.roi} base={baseRow?.roi} />}
+                  </td>
+                  <td className="px-3 py-3 text-slate-300">
+                    {fmtCurrency(row.profit)}
+                    {!isBase && <DeltaCurrency value={row.profit} base={baseRow?.profit} />}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
     </div>
   );
 }
+
+/* ── Delta display components ── */
+
+function deltaColor(delta: number, invert = false) {
+  const effective = invert ? -delta : delta;
+  if (effective > 0) return "text-emerald-400";
+  if (effective < 0) return "text-rose-400";
+  return "text-slate-500";
+}
+
+function deltaArrow(delta: number, invert = false) {
+  const effective = invert ? -delta : delta;
+  if (effective > 0) return "\u2191";
+  if (effective < 0) return "\u2193";
+  return "";
+}
+
+function DeltaCurrency({
+  value,
+  base,
+  invertColor = false,
+}: {
+  value: number | null | undefined;
+  base: number | null | undefined;
+  invertColor?: boolean;
+}) {
+  if (value == null || base == null || Number.isNaN(value) || Number.isNaN(base)) return null;
+  const delta = value - base;
+  if (delta === 0) return null;
+  const sign = delta > 0 ? "+" : "";
+  const formatted = new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(delta);
+  return (
+    <div className={`text-[11px] leading-tight ${deltaColor(delta, invertColor)}`}>
+      {deltaArrow(delta, invertColor)} {sign}{formatted} <span className="text-white/30">vs base</span>
+    </div>
+  );
+}
+
+function DeltaPercent({
+  value,
+  base,
+}: {
+  value: number | null | undefined;
+  base: number | null | undefined;
+}) {
+  if (value == null || base == null || Number.isNaN(value) || Number.isNaN(base)) return null;
+  const delta = value - base;
+  if (Math.abs(delta) < 0.0001) return null;
+  const sign = delta > 0 ? "+" : "";
+  return (
+    <div className={`text-[11px] leading-tight ${deltaColor(delta)}`}>
+      {deltaArrow(delta)} {sign}{(delta * 100).toFixed(1)} pts <span className="text-white/30">vs base</span>
+    </div>
+  );
+}
+
+function DeltaInteger({
+  value,
+  base,
+}: {
+  value: number | null | undefined;
+  base: number | null | undefined;
+}) {
+  if (value == null || base == null || Number.isNaN(value) || Number.isNaN(base)) return null;
+  const delta = value - base;
+  if (delta === 0) return null;
+  const sign = delta > 0 ? "+" : "";
+  return (
+    <div className={`text-[11px] leading-tight ${deltaColor(delta)}`}>
+      {deltaArrow(delta)} {sign}{delta.toLocaleString()} <span className="text-white/30">vs base</span>
+    </div>
+  );
+}
+
+/* ── Formatters ── */
 
 function fmtCurrency(v: number | null | undefined) {
   if (v == null || Number.isNaN(v)) return "—";
