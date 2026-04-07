@@ -291,8 +291,11 @@ export default function MapPage() {
     setLookupMessage("Running deep evaluation (optimization + sensitivity)...");
 
     try {
+      console.log("[DeepEvaluate] starting for", selectedParcel.id);
       const parcel = await ensureBedrockParcel(selectedParcel.id);
-      await runBedrockOptimize(parcel);
+      console.log("[DeepEvaluate] parcel loaded:", parcel.parcel_id);
+      const result = await runBedrockOptimize(parcel);
+      console.log("[DeepEvaluate] complete:", result.optimization_run_id);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["opportunities", "runs"] }),
         queryClient.invalidateQueries({ queryKey: ["recent-runs"] }),
@@ -301,8 +304,10 @@ export default function MapPage() {
       ]);
       setLookupMessage("Deep evaluation complete. This parcel now has a full acquisition recommendation in the Decision Report.");
     } catch (runError) {
-      setError(runError instanceof Error ? runError.message : "Deep evaluation failed.");
-      setLookupMessage("Deep evaluation failed. Try basic feasibility instead.");
+      const msg = runError instanceof Error ? runError.message : "Deep evaluation failed.";
+      console.error("[DeepEvaluate] FAILED:", msg, runError);
+      setError(msg);
+      setLookupMessage("Deep evaluation failed. Check that the Bedrock API is running on port 8000.");
     } finally {
       setEvaluatingParcelId(null);
     }
@@ -562,17 +567,17 @@ export default function MapPage() {
             onMapStatusChange={setMapStatus}
           />
 
-          <div className="absolute left-5 top-5 z-[450] rounded-full border border-slate-800 bg-slate-950/85 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-slate-300">
+          <div className="absolute left-5 top-5 z-[450] rounded-full border border-slate-700 bg-slate-950 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-slate-100 shadow-lg shadow-black/40">
             {apnSearching ? "Searching APN..." : `${county} County active`}
           </div>
-          <div className="absolute left-5 top-20 z-[450] rounded-[22px] border border-slate-900 bg-slate-950/96 px-4 py-3 text-xs uppercase tracking-[0.22em] text-slate-100 shadow-xl shadow-slate-950/60">
+          <div className="absolute left-5 top-20 z-[450] rounded-[22px] border border-slate-700 bg-slate-950 px-4 py-3 text-xs uppercase tracking-[0.22em] text-slate-200 shadow-lg shadow-black/40">
             {mapStatus.state === "ready" ? "GIS ready" : "Loading GIS"} • Zoom {viewport?.zoom?.toFixed(1) ?? "—"} •{" "}
             {parcelFeatureCount} parcels visible
           </div>
-          <div className="absolute left-5 top-36 z-[450] rounded-[22px] border border-cyan-400/20 bg-slate-950/96 px-4 py-3 text-xs uppercase tracking-[0.22em] text-cyan-100 shadow-xl shadow-slate-950/60">
+          <div className="absolute left-5 top-36 z-[450] rounded-[22px] border border-cyan-500/40 bg-slate-950 px-4 py-3 text-xs uppercase tracking-[0.22em] text-cyan-200 shadow-lg shadow-black/40">
             {parcelFeatureCount} real parcels loaded
           </div>
-          <div className="absolute left-5 top-52 z-[450] rounded-[22px] border border-amber-400/20 bg-slate-950/96 px-4 py-3 text-xs uppercase tracking-[0.22em] text-amber-100 shadow-xl shadow-slate-950/60">
+          <div className="absolute left-5 top-52 z-[450] rounded-[22px] border border-amber-500/40 bg-slate-950 px-4 py-3 text-xs uppercase tracking-[0.22em] text-amber-200 shadow-lg shadow-black/40">
             Showing development-scale parcels only
           </div>
           <div className="absolute right-5 top-5 z-[450] flex items-start gap-3">
