@@ -1,0 +1,58 @@
+{
+  "task_id": "prtest-1779219802",
+  "evaluated_at": "2026-05-19T19:43:25.298847+00:00",
+  "checks": {
+    "tests_passed": true,
+    "executor_benchmarks_passed": true,
+    "visual_regression_passed": true,
+    "geometry_validity_passed": true,
+    "benchmark_passed": true
+  },
+  "visual": {
+    "diff_ratio": 0.0,
+    "diff_pixels": 0
+  },
+  "cad_metrics": {
+    "malformed_geometry": true,
+    "degenerate_geometry": true,
+    "out_of_bounds_structures": true,
+    "exploded_scale": true,
+    "overlap_detection": true,
+    "invalid_setbacks": true,
+    "disconnected_roads": true,
+    "counts": {
+      "lots": 12,
+      "roads": 4,
+      "overlap_pairs": 0,
+      "invalid_setbacks": 0
+    },
+    "areas": [
+      6400.0,
+      6400.0,
+      6400.0,
+      6400.0,
+      6400.0,
+      6400.0,
+      6400.0,
+      6400.0,
+      6400.0,
+      6400.0,
+      6400.0,
+      6400.0
+    ]
+  },
+  "benchmark": {
+    "spacing_consistency": 1.0,
+    "realism": 1.0,
+    "road_continuity": 1.0,
+    "density_sanity": 1.0,
+    "layout_validity": 1.0,
+    "density_units_per_acre": 1.2,
+    "spacing_cv": 0.0,
+    "composite_score": 1.0,
+    "passed": true
+  },
+  "confidence": 0.9999999999999999,
+  "min_confidence": 0.75,
+  "verdict": "passed"
+}

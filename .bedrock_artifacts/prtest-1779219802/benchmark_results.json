@@ -1,0 +1,11 @@
+{
+  "spacing_consistency": 1.0,
+  "realism": 1.0,
+  "road_continuity": 1.0,
+  "density_sanity": 1.0,
+  "layout_validity": 1.0,
+  "density_units_per_acre": 1.2,
+  "spacing_cv": 0.0,
+  "composite_score": 1.0,
+  "passed": true
+}
